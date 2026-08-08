@@ -112,6 +112,8 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
     // Used for resetting video encoding on RESET_VIDEO message or for sending camera controls
     private SurfaceCapture surfaceCapture;
 
+    private DaemonCommandHandler daemonCommandHandler;
+
     public Controller(ControlChannel controlChannel, CleanUp cleanUp, Options options) {
         this.camera = options.getVideoSource() == VideoSource.CAMERA;
         this.controlChannel = controlChannel;
@@ -177,6 +179,7 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
 
     public void setSurfaceCapture(SurfaceCapture surfaceCapture) {
         this.surfaceCapture = surfaceCapture;
+        this.daemonCommandHandler = new DaemonCommandHandler(sender);
     }
 
     private UhidManager getUhidManager() {
@@ -435,6 +438,11 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
                 default:
                     // fall through
             }
+        }
+
+        // Daemon commands (1000+)
+        if (daemonCommandHandler != null && daemonCommandHandler.handle(msg)) {
+            return true;
         }
 
         throw new AssertionError("Unexpected message type: " + type);
