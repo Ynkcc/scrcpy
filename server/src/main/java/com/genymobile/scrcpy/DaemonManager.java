@@ -75,6 +75,7 @@ public final class DaemonManager {
         }
         if (vd != null) {
             try {
+                moveTasksToDefaultDisplay(displayId);
                 vd.release();
                 Ln.i("DaemonManager: released virtual display id=" + displayId);
                 return true;
@@ -129,7 +130,7 @@ public final class DaemonManager {
 
             int result = ServiceManager.getActivityManager().startActivity(launchIntent, options);
             Ln.i("DaemonManager: startActivity result=" + result);
-            return result > 0 ? 0 : -1;
+            return result >= 0 ? 0 : -1;
         } catch (Exception e) {
             Ln.e("DaemonManager: failed to start activity", e);
             return -1;
@@ -159,5 +160,47 @@ public final class DaemonManager {
             activeDisplays.clear();
         }
         Ln.i("DaemonManager: all virtual displays released");
+    }
+
+    private void moveTasksToDefaultDisplay(int displayId) {
+        try {
+            Ln.i("DaemonManager: Checking tasks on display " + displayId + " to move back to display 0");
+            android.os.IBinder binder = (android.os.IBinder) Class.forName("android.os.ServiceManager")
+                    .getMethod("getService", String.class)
+                    .invoke(null, "activity_task");
+            android.os.IInterface atm = (android.os.IInterface) Class.forName("android.app.IActivityTaskManager$Stub")
+                    .getMethod("asInterface", android.os.IBinder.class)
+                    .invoke(null, binder);
+
+            java.lang.reflect.Method getRecentTasksMethod = atm.getClass()
+                    .getMethod("getRecentTasks", int.class, int.class, int.class);
+            // 50 maxTasks, flags = 0, userId = -2 (USER_CURRENT)
+            Object parceledList = getRecentTasksMethod.invoke(atm, 50, 0, -2);
+
+            java.lang.reflect.Method getListMethod = parceledList.getClass().getMethod("getList");
+            java.util.List<?> list = (java.util.List<?>) getListMethod.invoke(parceledList);
+
+            if (list != null) {
+                for (Object taskInfo : list) {
+                    int taskDisplayId = taskInfo.getClass().getField("displayId").getInt(taskInfo);
+                    int taskId = taskInfo.getClass().getField("taskId").getInt(taskInfo);
+
+                    if (taskDisplayId == displayId) {
+                        Ln.i("DaemonManager: Moving task " + taskId + " back to display 0");
+                        try {
+                            java.lang.reflect.Method moveRootTaskToDisplay = atm.getClass()
+                                    .getMethod("moveRootTaskToDisplay", int.class, int.class);
+                            moveRootTaskToDisplay.invoke(atm, taskId, 0);
+                        } catch (NoSuchMethodException e) {
+                            java.lang.reflect.Method moveStackToDisplay = atm.getClass()
+                                    .getMethod("moveStackToDisplay", int.class, int.class);
+                            moveStackToDisplay.invoke(atm, taskId, 0);
+                        }
+                    }
+                }
+            }
+        } catch (Exception e) {
+            Ln.e("DaemonManager: Failed to move tasks back to display 0", e);
+        }
     }
 }
