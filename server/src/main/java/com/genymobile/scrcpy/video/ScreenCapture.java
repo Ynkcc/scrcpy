@@ -31,7 +31,7 @@ import java.util.Locale;
 public class ScreenCapture extends SurfaceCapture {
 
     private final VirtualDisplayListener vdListener;
-    private final int displayId;
+    private int displayId;
     private final Rect crop;
     private Orientation.Lock captureOrientationLock;
     private Orientation captureOrientation;
@@ -60,6 +60,17 @@ public class ScreenCapture extends SurfaceCapture {
         assert captureOrientationLock != null;
         assert captureOrientation != null;
         this.angle = options.getAngle();
+    }
+
+    public void setDisplayId(int displayId) {
+        if (this.displayId != displayId) {
+            Ln.i("ScreenCapture: setDisplayId from " + this.displayId + " to " + displayId);
+            this.displayId = displayId;
+            displayMonitor.setDisplayId(displayId);
+            if (getCaptureControl() != null) {
+                getCaptureControl().reset(CaptureControl.RESET_REASON_DISPLAY_PROPERTIES_CHANGED);
+            }
+        }
     }
 
     @Override

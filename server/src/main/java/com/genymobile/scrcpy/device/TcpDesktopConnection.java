@@ -81,7 +81,10 @@ public final class TcpDesktopConnection implements Closeable {
         Socket controlSocket = null;
         try {
             if (tunnelForward) {
-                try (ServerSocket serverSocket = new ServerSocket(port, 50, java.net.InetAddress.getByName("127.0.0.1"))) {
+                ServerSocket serverSocket = new ServerSocket();
+                serverSocket.setReuseAddress(true);
+                serverSocket.bind(new java.net.InetSocketAddress(java.net.InetAddress.getByName("127.0.0.1"), port), 50);
+                try {
                     if (video) {
                         videoSocket = serverSocket.accept();
                         if (sendDummyByte) {
@@ -103,6 +106,8 @@ public final class TcpDesktopConnection implements Closeable {
                             sendDummyByte = false;
                         }
                     }
+                } finally {
+                    serverSocket.close();
                 }
             } else {
                 if (video) {

@@ -137,6 +137,7 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
         this.keepActive = options.getKeepActive();
         initPointers();
         sender = new DeviceMessageSender(controlChannel);
+        daemonCommandHandler = new DaemonCommandHandler(sender, this);
 
         supportsInputEvents = Device.supportsInputEvents(displayId);
         if (!supportsInputEvents) {
@@ -179,7 +180,10 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
 
     public void setSurfaceCapture(SurfaceCapture surfaceCapture) {
         this.surfaceCapture = surfaceCapture;
-        this.daemonCommandHandler = new DaemonCommandHandler(sender);
+    }
+
+    public SurfaceCapture getSurfaceCapture() {
+        return surfaceCapture;
     }
 
     private UhidManager getUhidManager() {
@@ -308,6 +312,9 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
         }
         if (sender != null) {
             sender.stop();
+        }
+        if (daemonCommandHandler != null) {
+            daemonCommandHandler.close();
         }
     }
 
