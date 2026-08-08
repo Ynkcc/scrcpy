@@ -39,6 +39,7 @@ public final class ControlMessage {
     public static final int TYPE_GET_ACTIVE_DISPLAY_IDS = 205;
     public static final int TYPE_INJECT_INPUT_EVENT_WITH_DISPLAY_ID = 206;
     public static final int TYPE_SWITCH_DISPLAY = 207;
+    public static final int TYPE_EXIT_DAEMON = 208;
 
     public static final long SEQUENCE_INVALID = 0;
 

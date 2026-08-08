@@ -36,6 +36,10 @@ public class DisplayMonitor {
 
     private Listener listener;
 
+    public synchronized void setDisplayId(int displayId) {
+        this.displayId = displayId;
+    }
+
     public void start(int displayId, Listener listener) {
         // Once started, the listener and the displayId must never change
         assert listener != null;

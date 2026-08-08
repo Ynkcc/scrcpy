@@ -82,6 +82,12 @@ public class ControlMessageReader {
                 return parseInjectInputEventWithDisplayId();
             case ControlMessage.TYPE_SWITCH_DISPLAY:
                 return parseSwitchDisplay();
+            case ControlMessage.TYPE_EXIT_DAEMON: {
+                long sequence = dis.readLong();
+                ControlMessage msg = ControlMessage.createEmpty(type);
+                msg.setSequence(sequence);
+                return msg;
+            }
             default:
                 throw new ControlProtocolException("Unknown event type: " + type);
         }
