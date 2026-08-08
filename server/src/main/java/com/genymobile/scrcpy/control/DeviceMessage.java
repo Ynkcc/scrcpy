@@ -6,11 +6,20 @@ public final class DeviceMessage {
     public static final int TYPE_ACK_CLIPBOARD = 1;
     public static final int TYPE_UHID_OUTPUT = 2;
 
+    // Daemon device responses (100+)
+    public static final int TYPE_RESPONSE_GENERIC = 100;
+    public static final int TYPE_RESPONSE_ACTIVE_DISPLAYS = 101;
+
     private int type;
     private String text;
     private long sequence;
     private int id;
     private byte[] data;
+
+    // Daemon response fields
+    private int statusCode;
+    private int displayId;
+    private int[] displayIds;
 
     private DeviceMessage() {
     }
@@ -37,6 +46,24 @@ public final class DeviceMessage {
         return event;
     }
 
+    public static DeviceMessage createGenericResponse(long sequence, int statusCode, int displayId, String responseString) {
+        DeviceMessage event = new DeviceMessage();
+        event.type = TYPE_RESPONSE_GENERIC;
+        event.sequence = sequence;
+        event.statusCode = statusCode;
+        event.displayId = displayId;
+        event.text = responseString;
+        return event;
+    }
+
+    public static DeviceMessage createActiveDisplaysResponse(long sequence, int[] displayIds) {
+        DeviceMessage event = new DeviceMessage();
+        event.type = TYPE_RESPONSE_ACTIVE_DISPLAYS;
+        event.sequence = sequence;
+        event.displayIds = displayIds;
+        return event;
+    }
+
     public int getType() {
         return type;
     }
@@ -55,5 +82,17 @@ public final class DeviceMessage {
 
     public byte[] getData() {
         return data;
+    }
+
+    public int getStatusCode() {
+        return statusCode;
+    }
+
+    public int getDisplayId() {
+        return displayId;
+    }
+
+    public int[] getDisplayIds() {
+        return displayIds;
     }
 }

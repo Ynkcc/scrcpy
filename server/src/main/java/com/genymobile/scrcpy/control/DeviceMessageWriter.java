@@ -39,6 +39,23 @@ public class DeviceMessageWriter {
                 dos.writeShort(data.length);
                 dos.write(data);
                 break;
+            case DeviceMessage.TYPE_RESPONSE_GENERIC:
+                dos.writeLong(msg.getSequence());
+                dos.writeInt(msg.getStatusCode());
+                dos.writeInt(msg.getDisplayId());
+                String responseText = msg.getText();
+                byte[] responseBytes = responseText != null ? responseText.getBytes(StandardCharsets.UTF_8) : new byte[0];
+                dos.writeInt(responseBytes.length);
+                dos.write(responseBytes);
+                break;
+            case DeviceMessage.TYPE_RESPONSE_ACTIVE_DISPLAYS:
+                dos.writeLong(msg.getSequence());
+                int[] ids = msg.getDisplayIds();
+                dos.writeInt(ids.length);
+                for (int id : ids) {
+                    dos.writeInt(id);
+                }
+                break;
             default:
                 throw new ControlProtocolException("Unknown event type: " + type);
         }

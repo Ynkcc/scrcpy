@@ -31,6 +31,15 @@ public final class ControlMessage {
     public static final int TYPE_RESIZE_DISPLAY = 21;
     public static final int TYPE_SCAN_FILE = 22;
 
+    // Daemon control commands (200+)
+    public static final int TYPE_CREATE_VIRTUAL_DISPLAY = 201;
+    public static final int TYPE_RELEASE_VIRTUAL_DISPLAY = 202;
+    public static final int TYPE_RESIZE_VIRTUAL_DISPLAY = 203;
+    public static final int TYPE_START_ACTIVITY = 204;
+    public static final int TYPE_GET_ACTIVE_DISPLAY_IDS = 205;
+    public static final int TYPE_INJECT_INPUT_EVENT_WITH_DISPLAY_ID = 206;
+    public static final int TYPE_SWITCH_DISPLAY = 207;
+
     public static final long SEQUENCE_INVALID = 0;
 
     public static final int COPY_KEY_NONE = 0;
@@ -60,6 +69,12 @@ public final class ControlMessage {
     private int productId;
     private int width;
     private int height;
+
+    // Daemon-specific fields
+    private int displayId;
+    private int dpi;
+    private int flags;
+    private boolean isKeyEvent;
 
     private ControlMessage() {
     }
@@ -195,6 +210,58 @@ public final class ControlMessage {
         return msg;
     }
 
+    public static ControlMessage createCreateVirtualDisplay(String name, int width, int height, int dpi, int flags) {
+        ControlMessage msg = new ControlMessage();
+        msg.type = TYPE_CREATE_VIRTUAL_DISPLAY;
+        msg.text = name;
+        msg.width = width;
+        msg.height = height;
+        msg.dpi = dpi;
+        msg.flags = flags;
+        return msg;
+    }
+
+    public static ControlMessage createReleaseVirtualDisplay(int displayId) {
+        ControlMessage msg = new ControlMessage();
+        msg.type = TYPE_RELEASE_VIRTUAL_DISPLAY;
+        msg.displayId = displayId;
+        return msg;
+    }
+
+    public static ControlMessage createResizeVirtualDisplay(int displayId, int width, int height, int dpi) {
+        ControlMessage msg = new ControlMessage();
+        msg.type = TYPE_RESIZE_VIRTUAL_DISPLAY;
+        msg.displayId = displayId;
+        msg.width = width;
+        msg.height = height;
+        msg.dpi = dpi;
+        return msg;
+    }
+
+    public static ControlMessage createStartActivity(String packageName, int displayId) {
+        ControlMessage msg = new ControlMessage();
+        msg.type = TYPE_START_ACTIVITY;
+        msg.text = packageName;
+        msg.displayId = displayId;
+        return msg;
+    }
+
+    public static ControlMessage createInjectInputEventWithDisplayId(int displayId, boolean isKeyEvent, byte[] parcelBytes) {
+        ControlMessage msg = new ControlMessage();
+        msg.type = TYPE_INJECT_INPUT_EVENT_WITH_DISPLAY_ID;
+        msg.displayId = displayId;
+        msg.isKeyEvent = isKeyEvent;
+        msg.data = parcelBytes;
+        return msg;
+    }
+
+    public static ControlMessage createSwitchDisplay(int displayId) {
+        ControlMessage msg = new ControlMessage();
+        msg.type = TYPE_SWITCH_DISPLAY;
+        msg.displayId = displayId;
+        return msg;
+    }
+
     public int getType() {
         return type;
     }
@@ -285,5 +352,25 @@ public final class ControlMessage {
 
     public int getHeight() {
         return height;
+    }
+
+    public int getDisplayId() {
+        return displayId;
+    }
+
+    public int getDpi() {
+        return dpi;
+    }
+
+    public int getFlags() {
+        return flags;
+    }
+
+    public boolean isKeyEvent() {
+        return isKeyEvent;
+    }
+
+    public void setSequence(long sequence) {
+        this.sequence = sequence;
     }
 }

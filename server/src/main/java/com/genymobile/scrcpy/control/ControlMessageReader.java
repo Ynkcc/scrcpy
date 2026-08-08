@@ -64,6 +64,24 @@ public class ControlMessageReader {
                 return parseResizeDisplay();
             case ControlMessage.TYPE_SCAN_FILE:
                 return parseScanFile();
+            case ControlMessage.TYPE_CREATE_VIRTUAL_DISPLAY:
+                return parseCreateVirtualDisplay();
+            case ControlMessage.TYPE_RELEASE_VIRTUAL_DISPLAY:
+                return parseReleaseVirtualDisplay();
+            case ControlMessage.TYPE_RESIZE_VIRTUAL_DISPLAY:
+                return parseResizeVirtualDisplay();
+            case ControlMessage.TYPE_START_ACTIVITY:
+                return parseStartActivityWithDisplay();
+            case ControlMessage.TYPE_GET_ACTIVE_DISPLAY_IDS: {
+                long sequence = dis.readLong();
+                ControlMessage msg = ControlMessage.createEmpty(type);
+                msg.setSequence(sequence);
+                return msg;
+            }
+            case ControlMessage.TYPE_INJECT_INPUT_EVENT_WITH_DISPLAY_ID:
+                return parseInjectInputEventWithDisplayId();
+            case ControlMessage.TYPE_SWITCH_DISPLAY:
+                return parseSwitchDisplay();
             default:
                 throw new ControlProtocolException("Unknown event type: " + type);
         }
@@ -196,5 +214,63 @@ public class ControlMessageReader {
         int screenWidth = dis.readUnsignedShort();
         int screenHeight = dis.readUnsignedShort();
         return new Position(x, y, screenWidth, screenHeight);
+    }
+
+    private ControlMessage parseCreateVirtualDisplay() throws IOException {
+        long sequence = dis.readLong();
+        String name = parseString();
+        int width = dis.readInt();
+        int height = dis.readInt();
+        int dpi = dis.readInt();
+        int flags = dis.readInt();
+        ControlMessage msg = ControlMessage.createCreateVirtualDisplay(name, width, height, dpi, flags);
+        msg.setSequence(sequence);
+        return msg;
+    }
+
+    private ControlMessage parseReleaseVirtualDisplay() throws IOException {
+        long sequence = dis.readLong();
+        int displayId = dis.readInt();
+        ControlMessage msg = ControlMessage.createReleaseVirtualDisplay(displayId);
+        msg.setSequence(sequence);
+        return msg;
+    }
+
+    private ControlMessage parseResizeVirtualDisplay() throws IOException {
+        long sequence = dis.readLong();
+        int displayId = dis.readInt();
+        int width = dis.readInt();
+        int height = dis.readInt();
+        int dpi = dis.readInt();
+        ControlMessage msg = ControlMessage.createResizeVirtualDisplay(displayId, width, height, dpi);
+        msg.setSequence(sequence);
+        return msg;
+    }
+
+    private ControlMessage parseStartActivityWithDisplay() throws IOException {
+        long sequence = dis.readLong();
+        String packageName = parseString();
+        int displayId = dis.readInt();
+        ControlMessage msg = ControlMessage.createStartActivity(packageName, displayId);
+        msg.setSequence(sequence);
+        return msg;
+    }
+
+    private ControlMessage parseInjectInputEventWithDisplayId() throws IOException {
+        long sequence = dis.readLong();
+        int displayId = dis.readInt();
+        boolean isKeyEvent = dis.readByte() != 0;
+        byte[] parcelBytes = parseByteArray(4);
+        ControlMessage msg = ControlMessage.createInjectInputEventWithDisplayId(displayId, isKeyEvent, parcelBytes);
+        msg.setSequence(sequence);
+        return msg;
+    }
+
+    private ControlMessage parseSwitchDisplay() throws IOException {
+        long sequence = dis.readLong();
+        int displayId = dis.readInt();
+        ControlMessage msg = ControlMessage.createSwitchDisplay(displayId);
+        msg.setSequence(sequence);
+        return msg;
     }
 }
