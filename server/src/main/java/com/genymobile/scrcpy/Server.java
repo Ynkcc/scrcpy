@@ -12,6 +12,7 @@ import com.genymobile.scrcpy.control.Controller;
 import com.genymobile.scrcpy.device.DesktopConnection;
 import com.genymobile.scrcpy.device.Device;
 import com.genymobile.scrcpy.device.Streamer;
+import com.genymobile.scrcpy.device.TcpDesktopConnection;
 import com.genymobile.scrcpy.model.ConfigurationException;
 import com.genymobile.scrcpy.model.NewDisplay;
 import com.genymobile.scrcpy.opengl.OpenGLRunner;
@@ -68,7 +69,7 @@ public final class Server {
         // not instantiable
     }
 
-    private static void scrcpy(Options options) throws IOException, ConfigurationException {
+    private static void scrcpy(Options options, DaemonOptions daemonOptions) throws IOException, ConfigurationException {
         if (Build.VERSION.SDK_INT < AndroidVersions.API_31_ANDROID_12 && options.getVideoSource() == VideoSource.CAMERA) {
             Ln.e("Camera mirroring is not supported before Android 12");
             throw new ConfigurationException("Camera mirroring is not supported");
@@ -102,16 +103,31 @@ public final class Server {
 
         List<AsyncProcessor> asyncProcessors = new ArrayList<>();
 
-        DesktopConnection connection = DesktopConnection.open(scid, tunnelForward, video, audio, control, sendDummyByte);
+        boolean isDaemon = daemonOptions != null && daemonOptions.isDaemonMode();
+        int customPort = daemonOptions != null ? daemonOptions.getPort() : -1;
+        DesktopConnection connection = null;
+        TcpDesktopConnection tcpConnection = null;
+
+        if (isDaemon) {
+            tcpConnection = TcpDesktopConnection.open(scid, customPort, tunnelForward, video, audio, control, sendDummyByte);
+        } else {
+            connection = DesktopConnection.open(scid, tunnelForward, video, audio, control, sendDummyByte);
+        }
+
         try {
+            String deviceName = Device.getDeviceName();
             if (options.getSendDeviceMeta()) {
-                connection.sendDeviceMeta(Device.getDeviceName());
+                if (isDaemon) {
+                    tcpConnection.sendDeviceMeta(deviceName);
+                } else {
+                    connection.sendDeviceMeta(deviceName);
+                }
             }
 
             Controller controller = null;
 
             if (control) {
-                ControlChannel controlChannel = connection.getControlChannel();
+                ControlChannel controlChannel = isDaemon ? tcpConnection.getControlChannel() : connection.getControlChannel();
                 controller = new Controller(controlChannel, cleanUp, options);
                 asyncProcessors.add(controller);
             }
@@ -126,7 +142,8 @@ public final class Server {
                     audioCapture = new AudioPlaybackCapture(options.getAudioDup());
                 }
 
-                Streamer audioStreamer = new Streamer(connection.getAudioFd(), audioCodec, options.getSendStreamMeta(), options.getSendFrameMeta());
+                Streamer audioStreamer = new Streamer(isDaemon ? tcpConnection.getAudioFd() : connection.getAudioFd(), audioCodec,
+                        options.getSendStreamMeta(), options.getSendFrameMeta());
                 AsyncProcessor audioRecorder;
                 if (audioCodec == AudioCodec.RAW) {
                     audioRecorder = new AudioRawRecorder(audioCapture, audioStreamer);
@@ -137,16 +154,22 @@ public final class Server {
             }
 
             if (video) {
-                Streamer videoStreamer = new Streamer(connection.getVideoFd(), options.getVideoCodec(), options.getSendStreamMeta(),
-                        options.getSendFrameMeta());
+                Streamer videoStreamer = new Streamer(isDaemon ? tcpConnection.getVideoFd() : connection.getVideoFd(),
+                        options.getVideoCodec(), options.getSendStreamMeta(), options.getSendFrameMeta());
                 SurfaceCapture surfaceCapture;
                 if (options.getVideoSource() == VideoSource.DISPLAY) {
                     NewDisplay newDisplay = options.getNewDisplay();
                     if (newDisplay != null) {
                         surfaceCapture = new NewDisplayCapture(controller, options);
                     } else {
-                        assert options.getDisplayId() != Device.DISPLAY_ID_NONE;
-                        surfaceCapture = new ScreenCapture(controller, options);
+                        Options captureOptions = options;
+                        if (isDaemon) {
+                            int targetDisplayId = DaemonManager.getInstance().getTargetDisplayId();
+                            if (targetDisplayId != 0) {
+                                captureOptions = options.copyWithDisplayId(targetDisplayId);
+                            }
+                        }
+                        surfaceCapture = new ScreenCapture(controller, captureOptions);
                     }
                 } else {
                     surfaceCapture = new CameraCapture(options);
@@ -175,7 +198,11 @@ public final class Server {
                 asyncProcessor.stop();
             }
 
-            connection.shutdown();
+            if (isDaemon) {
+                tcpConnection.shutdown();
+            } else {
+                connection.shutdown();
+            }
 
             try {
                 if (cleanUp != null) {
@@ -190,13 +217,19 @@ public final class Server {
                 // ignore
             }
 
-            connection.close();
+            if (isDaemon) {
+                tcpConnection.close();
+            } else {
+                connection.close();
+            }
         }
     }
 
     private static void prepareMainLooper() {
         // Like Looper.prepareMainLooper(), but with quitAllowed set to true
-        Looper.prepare();
+        if (Looper.myLooper() == null) {
+            Looper.prepare();
+        }
         synchronized (Looper.class) {
             try {
                 @SuppressLint("DiscouragedPrivateApi")
@@ -224,6 +257,24 @@ public final class Server {
         }
     }
 
+    private static DaemonOptions parseDaemonOptions(String... args) {
+        DaemonOptions opts = new DaemonOptions();
+        for (String arg : args) {
+            if ("--daemon".equals(arg)) {
+                opts.setDaemonMode(true);
+            } else if (arg.startsWith("--port=")) {
+                try {
+                    int port = Integer.parseInt(arg.substring("--port=".length()));
+                    if (port >= 1024 && port <= 65535) {
+                        opts.setPort(port);
+                    }
+                } catch (NumberFormatException ignored) {
+                }
+            }
+        }
+        return opts;
+    }
+
     private static void internalMain(String... args) throws Exception {
         Thread.UncaughtExceptionHandler defaultHandler = Thread.getDefaultUncaughtExceptionHandler();
         Thread.setDefaultUncaughtExceptionHandler((t, e) -> {
@@ -238,6 +289,7 @@ public final class Server {
         prepareMainLooper();
 
         Options options = Options.parse(args);
+        DaemonOptions daemonOptions = parseDaemonOptions(args);
 
         Ln.disableSystemStreams();
         Ln.initLogLevel(options.getLogLevel());
@@ -269,10 +321,10 @@ public final class Server {
             return;
         }
 
-        try {
-            scrcpy(options);
-        } catch (ConfigurationException e) {
-            // Do not print stack trace, a user-friendly error-message has already been logged
+        if (daemonOptions.isDaemonMode()) {
+            DaemonRunner.run(options, daemonOptions, (opts, dos) -> scrcpy(opts, dos));
+        } else {
+            scrcpy(options, null);
         }
     }
 
