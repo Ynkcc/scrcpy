@@ -1,4 +1,4 @@
-package com.genymobile.scrcpy.compat;
+package com.genymobile.scrcpy.daemon.compat;
 
 import com.genymobile.scrcpy.util.Ln;
 import com.genymobile.scrcpy.wrappers.ServiceManager;

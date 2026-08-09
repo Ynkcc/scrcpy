@@ -64,6 +64,7 @@ public final class Device {
             throw new AssertionError("Could not inject input event if !supportsInputEvents()");
         }
 
+        // 允许向除 0 号物理屏幕外的任何非负屏幕（如 daemon 创建的虚拟屏幕）注入输入事件
         if (displayId >= 0 && !InputManager.setDisplayId(inputEvent, displayId)) {
             return false;
         }

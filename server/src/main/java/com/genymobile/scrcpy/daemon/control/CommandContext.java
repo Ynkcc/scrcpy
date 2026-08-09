@@ -1,9 +1,10 @@
-package com.genymobile.scrcpy.control;
+package com.genymobile.scrcpy.daemon.control;
 
-import com.genymobile.scrcpy.VideoController;
+import com.genymobile.scrcpy.control.Controller;
+import com.genymobile.scrcpy.control.DeviceMessageSender;
+import com.genymobile.scrcpy.daemon.VideoController;
 
 public class CommandContext {
-
     private final DeviceMessageSender sender;
     private final Controller controller;
     private final VideoController videoController;

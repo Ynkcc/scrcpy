@@ -31,18 +31,6 @@ public final class ControlMessage {
     public static final int TYPE_RESIZE_DISPLAY = 21;
     public static final int TYPE_SCAN_FILE = 22;
 
-    // Daemon control commands (200+)
-    public static final int TYPE_CREATE_VIRTUAL_DISPLAY = 201;
-    public static final int TYPE_RELEASE_VIRTUAL_DISPLAY = 202;
-    public static final int TYPE_RESIZE_VIRTUAL_DISPLAY = 203;
-    public static final int TYPE_START_ACTIVITY = 204;
-    public static final int TYPE_GET_ACTIVE_DISPLAY_IDS = 205;
-    public static final int TYPE_INJECT_INPUT_EVENT_WITH_DISPLAY_ID = 206;
-    public static final int TYPE_SWITCH_DISPLAY = 207;
-    public static final int TYPE_EXIT_DAEMON = 208;
-    public static final int TYPE_START_VIDEO_STREAM = 209;
-    public static final int TYPE_STOP_VIDEO_STREAM = 210;
-
     public static final long SEQUENCE_INVALID = 0;
 
     public static final int COPY_KEY_NONE = 0;
@@ -50,7 +38,7 @@ public final class ControlMessage {
     public static final int COPY_KEY_CUT = 2;
 
     private int type;
-    private String text;
+    String text;
     private int metaState; // KeyEvent.META_*
     private int action; // KeyEvent.ACTION_* or MotionEvent.ACTION_*
     private int keycode; // KeyEvent.KEYCODE_*
@@ -66,14 +54,13 @@ public final class ControlMessage {
     private int repeat;
     private long sequence;
     private int id;
-    private byte[] data;
+    byte[] data;
     private boolean on;
     private int vendorId;
     private int productId;
-    private int width;
-    private int height;
+    int width;
+    int height;
 
-    // Daemon-specific fields
     private int displayId;
     private int dpi;
     private int flags;
@@ -213,73 +200,6 @@ public final class ControlMessage {
         return msg;
     }
 
-    public static ControlMessage createCreateVirtualDisplay(String name, int width, int height, int dpi, int flags) {
-        ControlMessage msg = new ControlMessage();
-        msg.type = TYPE_CREATE_VIRTUAL_DISPLAY;
-        msg.text = name;
-        msg.width = width;
-        msg.height = height;
-        msg.dpi = dpi;
-        msg.flags = flags;
-        return msg;
-    }
-
-    public static ControlMessage createReleaseVirtualDisplay(int displayId) {
-        ControlMessage msg = new ControlMessage();
-        msg.type = TYPE_RELEASE_VIRTUAL_DISPLAY;
-        msg.displayId = displayId;
-        return msg;
-    }
-
-    public static ControlMessage createResizeVirtualDisplay(int displayId, int width, int height, int dpi) {
-        ControlMessage msg = new ControlMessage();
-        msg.type = TYPE_RESIZE_VIRTUAL_DISPLAY;
-        msg.displayId = displayId;
-        msg.width = width;
-        msg.height = height;
-        msg.dpi = dpi;
-        return msg;
-    }
-
-    public static ControlMessage createStartActivity(String packageName, int displayId) {
-        ControlMessage msg = new ControlMessage();
-        msg.type = TYPE_START_ACTIVITY;
-        msg.text = packageName;
-        msg.displayId = displayId;
-        return msg;
-    }
-
-    public static ControlMessage createInjectInputEventWithDisplayId(int displayId, boolean isKeyEvent, byte[] parcelBytes) {
-        ControlMessage msg = new ControlMessage();
-        msg.type = TYPE_INJECT_INPUT_EVENT_WITH_DISPLAY_ID;
-        msg.displayId = displayId;
-        msg.isKeyEvent = isKeyEvent;
-        msg.data = parcelBytes;
-        return msg;
-    }
-
-    public static ControlMessage createSwitchDisplay(int displayId) {
-        ControlMessage msg = new ControlMessage();
-        msg.type = TYPE_SWITCH_DISPLAY;
-        msg.displayId = displayId;
-        return msg;
-    }
-
-    public static ControlMessage createStartVideoStream(long sequence, int displayId) {
-        ControlMessage msg = new ControlMessage();
-        msg.type = TYPE_START_VIDEO_STREAM;
-        msg.displayId = displayId;
-        msg.setSequence(sequence);
-        return msg;
-    }
-
-    public static ControlMessage createStopVideoStream(long sequence) {
-        ControlMessage msg = new ControlMessage();
-        msg.type = TYPE_STOP_VIDEO_STREAM;
-        msg.setSequence(sequence);
-        return msg;
-    }
-
     public int getType() {
         return type;
     }
@@ -372,16 +292,32 @@ public final class ControlMessage {
         return height;
     }
 
+    public void setDisplayId(int displayId) {
+        this.displayId = displayId;
+    }
+
     public int getDisplayId() {
         return displayId;
+    }
+
+    public void setDpi(int dpi) {
+        this.dpi = dpi;
     }
 
     public int getDpi() {
         return dpi;
     }
 
+    public void setFlags(int flags) {
+        this.flags = flags;
+    }
+
     public int getFlags() {
         return flags;
+    }
+
+    public void setKeyEvent(boolean isKeyEvent) {
+        this.isKeyEvent = isKeyEvent;
     }
 
     public boolean isKeyEvent() {

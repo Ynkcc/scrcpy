@@ -1,7 +1,6 @@
 package com.genymobile.scrcpy.video;
 
 import com.genymobile.scrcpy.AndroidVersions;
-import com.genymobile.scrcpy.DaemonManager;
 import com.genymobile.scrcpy.Options;
 import com.genymobile.scrcpy.control.PositionMapper;
 import com.genymobile.scrcpy.device.Device;
@@ -38,6 +37,25 @@ public class ScreenCapture extends SurfaceCapture {
     private Orientation captureOrientation;
     private final float angle;
 
+    private boolean isDaemonManaged;
+
+    private static ExternalDisplayProvider externalDisplayProvider;
+
+    public static void setExternalDisplayProvider(ExternalDisplayProvider provider) {
+        externalDisplayProvider = provider;
+    }
+
+    public void setDisplayId(int displayId) {
+        if (this.displayId != displayId) {
+            Ln.i("ScreenCapture: setDisplayId from " + this.displayId + " to " + displayId);
+            this.displayId = displayId;
+            displayMonitor.setDisplayId(displayId);
+            if (getCaptureControl() != null) {
+                getCaptureControl().reset(CaptureControl.RESET_REASON_DISPLAY_PROPERTIES_CHANGED);
+            }
+        }
+    }
+
     private VideoConstraints videoConstraints;
 
     private DisplayInfo displayInfo;
@@ -47,7 +65,6 @@ public class ScreenCapture extends SurfaceCapture {
 
     private IBinder display;
     private VirtualDisplay virtualDisplay;
-    private boolean isDaemonManaged;
 
     private AffineMatrix transform;
     private OpenGLRunner glRunner;
@@ -62,17 +79,6 @@ public class ScreenCapture extends SurfaceCapture {
         assert captureOrientationLock != null;
         assert captureOrientation != null;
         this.angle = options.getAngle();
-    }
-
-    public void setDisplayId(int displayId) {
-        if (this.displayId != displayId) {
-            Ln.i("ScreenCapture: setDisplayId from " + this.displayId + " to " + displayId);
-            this.displayId = displayId;
-            displayMonitor.setDisplayId(displayId);
-            if (getCaptureControl() != null) {
-                getCaptureControl().reset(CaptureControl.RESET_REASON_DISPLAY_PROPERTIES_CHANGED);
-            }
-        }
     }
 
     @Override
@@ -118,11 +124,6 @@ public class ScreenCapture extends SurfaceCapture {
         videoSize = filter.getOutputSize().constrain(videoConstraints);
     }
 
-    @SuppressWarnings("deprecation")
-    private static Size getDisplaySize(android.view.Display display) {
-        return new Size(display.getWidth(), display.getHeight());
-    }
-
     @Override
     public void start(Surface surface) throws IOException {
         if (display != null) {
@@ -135,39 +136,41 @@ public class ScreenCapture extends SurfaceCapture {
         }
         isDaemonManaged = false;
 
-        VirtualDisplay daemonVD = DaemonManager.getInstance().getVirtualDisplay(displayId);
-        if (daemonVD != null) {
-            Ln.i("ScreenCapture: using daemon-managed virtual display directly (displayId=" + displayId + ")");
-            try {
-                if (virtualDisplay != null) {
-                    virtualDisplay.setSurface(null);
-                }
-                daemonVD.setSurface(surface);
-                virtualDisplay = daemonVD;
-                isDaemonManaged = true;
+        if (externalDisplayProvider != null) {
+            VirtualDisplay daemonVD = externalDisplayProvider.get(displayId);
+            if (daemonVD != null) {
+                Ln.i("ScreenCapture: using daemon-managed virtual display directly (displayId=" + displayId + ")");
                 try {
-                    boolean powered = ServiceManager.getDisplayManager().requestDisplayPower(displayId, true);
-                    Ln.i("ScreenCapture: requestDisplayPower(" + displayId + ", true) = " + powered);
-                } catch (Throwable t) {
-                    Ln.w("ScreenCapture: requestDisplayPower not supported: " + t.getMessage());
-                }
-
-                if (vdListener != null) {
-                    PositionMapper positionMapper;
-                    if (transform != null) {
-                        Size inputSize = displayInfo != null ? displayInfo.getSize() : getDisplaySize(daemonVD.getDisplay());
-                        positionMapper = PositionMapper.create(videoSize, transform, inputSize);
-                    } else {
-                        Size displaySize = getDisplaySize(daemonVD.getDisplay());
-                        positionMapper = PositionMapper.create(videoSize, transform, displaySize);
+                    if (virtualDisplay != null) {
+                        virtualDisplay.setSurface(null);
                     }
-                    vdListener.onNewVirtualDisplay(displayId, positionMapper);
+                    daemonVD.setSurface(surface);
+                    virtualDisplay = daemonVD;
+                    isDaemonManaged = true;
+                    try {
+                        boolean powered = ServiceManager.getDisplayManager().requestDisplayPower(displayId, true);
+                        Ln.i("ScreenCapture: requestDisplayPower(" + displayId + ", true) = " + powered);
+                    } catch (Throwable t) {
+                         Ln.w("ScreenCapture: requestDisplayPower not supported: " + t.getMessage());
+                    }
+
+                    if (vdListener != null) {
+                        PositionMapper positionMapper;
+                        if (transform != null) {
+                            Size inputSize = displayInfo != null ? displayInfo.getSize() : new Size(daemonVD.getDisplay().getWidth(), daemonVD.getDisplay().getHeight());
+                            positionMapper = PositionMapper.create(videoSize, transform, inputSize);
+                        } else {
+                            Size displaySize = new Size(daemonVD.getDisplay().getWidth(), daemonVD.getDisplay().getHeight());
+                            positionMapper = PositionMapper.create(videoSize, transform, displaySize);
+                        }
+                        vdListener.onNewVirtualDisplay(displayId, positionMapper);
+                    }
+                } catch (Exception e) {
+                    Ln.e("ScreenCapture: failed to bind surface to daemon virtual display", e);
+                    throw new IOException("Failed to bind surface to daemon virtual display", e);
                 }
-            } catch (Exception e) {
-                Ln.e("ScreenCapture: failed to bind surface to daemon virtual display", e);
-                throw new IOException("Failed to bind surface to daemon virtual display", e);
+                return;
             }
-            return;
         }
 
         Size inputSize;
@@ -234,8 +237,8 @@ public class ScreenCapture extends SurfaceCapture {
             glRunner.stopAndRelease();
             glRunner = null;
         }
-        if (isDaemonManaged && virtualDisplay != null) {
-            DaemonManager.getInstance().restoreFallbackSurface(displayId);
+        if (isDaemonManaged && virtualDisplay != null && externalDisplayProvider != null) {
+            externalDisplayProvider.restore(displayId);
         }
     }
 
@@ -250,8 +253,8 @@ public class ScreenCapture extends SurfaceCapture {
         if (virtualDisplay != null) {
             if (!isDaemonManaged) {
                 virtualDisplay.release();
-            } else {
-                DaemonManager.getInstance().restoreFallbackSurface(displayId);
+            } else if (externalDisplayProvider != null) {
+                externalDisplayProvider.restore(displayId);
             }
             virtualDisplay = null;
             isDaemonManaged = false;

@@ -12,7 +12,6 @@ import com.genymobile.scrcpy.control.Controller;
 import com.genymobile.scrcpy.device.DesktopConnection;
 import com.genymobile.scrcpy.device.Device;
 import com.genymobile.scrcpy.device.Streamer;
-import com.genymobile.scrcpy.device.TcpDesktopConnection;
 import com.genymobile.scrcpy.model.ConfigurationException;
 import com.genymobile.scrcpy.model.NewDisplay;
 import com.genymobile.scrcpy.opengl.OpenGLRunner;
@@ -35,7 +34,6 @@ import java.io.IOException;
 import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.CountDownLatch;
 
 public final class Server {
 
@@ -48,15 +46,11 @@ public final class Server {
     }
 
     private static class Completion {
-        private final int total;
         private int running;
         private boolean fatalError;
-        private final CountDownLatch latch;
 
-        Completion(int running, boolean useLatch) {
-            this.total = running;
+        Completion(int running) {
             this.running = running;
-            this.latch = useLatch ? new CountDownLatch(1) : null;
         }
 
         synchronized void addCompleted(boolean fatalError) {
@@ -65,24 +59,8 @@ public final class Server {
                 this.fatalError = true;
             }
             if (running == 0 || this.fatalError) {
-                if (latch != null) {
-                    latch.countDown();
-                } else {
-                    Looper.getMainLooper().quitSafely();
-                }
+                Looper.getMainLooper().quitSafely();
             }
-        }
-
-        void await() throws InterruptedException {
-            if (latch != null) {
-                latch.await();
-            } else {
-                Looper.loop();
-            }
-        }
-
-        boolean isFatalError() {
-            return fatalError;
         }
     }
 
@@ -90,7 +68,7 @@ public final class Server {
         // not instantiable
     }
 
-    private static void scrcpy(Options options, DaemonOptions daemonOptions) throws IOException, ConfigurationException {
+    private static void scrcpy(Options options) throws IOException, ConfigurationException {
         if (Build.VERSION.SDK_INT < AndroidVersions.API_31_ANDROID_12 && options.getVideoSource() == VideoSource.CAMERA) {
             Ln.e("Camera mirroring is not supported before Android 12");
             throw new ConfigurationException("Camera mirroring is not supported");
@@ -124,18 +102,10 @@ public final class Server {
 
         List<AsyncProcessor> asyncProcessors = new ArrayList<>();
 
-        boolean isDaemon = daemonOptions != null && daemonOptions.isDaemonMode();
-        DesktopConnection connection;
-
-        if (isDaemon) {
-            throw new IllegalStateException("Daemon mode must use DaemonServer");
-        }
-        connection = DesktopConnection.open(scid, tunnelForward, video, audio, control, sendDummyByte);
-
+        DesktopConnection connection = DesktopConnection.open(scid, tunnelForward, video, audio, control, sendDummyByte);
         try {
-            String deviceName = Device.getDeviceName();
             if (options.getSendDeviceMeta()) {
-                connection.sendDeviceMeta(deviceName);
+                connection.sendDeviceMeta(Device.getDeviceName());
             }
 
             Controller controller = null;
@@ -156,8 +126,7 @@ public final class Server {
                     audioCapture = new AudioPlaybackCapture(options.getAudioDup());
                 }
 
-                Streamer audioStreamer = new Streamer(connection.getAudioFd(), audioCodec,
-                        options.getSendStreamMeta(), options.getSendFrameMeta());
+                Streamer audioStreamer = new Streamer(connection.getAudioFd(), audioCodec, options.getSendStreamMeta(), options.getSendFrameMeta());
                 AsyncProcessor audioRecorder;
                 if (audioCodec == AudioCodec.RAW) {
                     audioRecorder = new AudioRawRecorder(audioCapture, audioStreamer);
@@ -168,14 +137,15 @@ public final class Server {
             }
 
             if (video) {
-                Streamer videoStreamer = new Streamer(connection.getVideoFd(),
-                        options.getVideoCodec(), options.getSendStreamMeta(), options.getSendFrameMeta());
+                Streamer videoStreamer = new Streamer(connection.getVideoFd(), options.getVideoCodec(), options.getSendStreamMeta(),
+                        options.getSendFrameMeta());
                 SurfaceCapture surfaceCapture;
                 if (options.getVideoSource() == VideoSource.DISPLAY) {
                     NewDisplay newDisplay = options.getNewDisplay();
                     if (newDisplay != null) {
                         surfaceCapture = new NewDisplayCapture(controller, options);
                     } else {
+                        assert options.getDisplayId() != Device.DISPLAY_ID_NONE;
                         surfaceCapture = new ScreenCapture(controller, options);
                     }
                 } else {
@@ -189,19 +159,14 @@ public final class Server {
                 }
             }
 
-            Completion completion = new Completion(asyncProcessors.size(), false);
+            Completion completion = new Completion(asyncProcessors.size());
             for (AsyncProcessor asyncProcessor : asyncProcessors) {
                 asyncProcessor.start((fatalError) -> {
                     completion.addCompleted(fatalError);
                 });
             }
 
-            try {
-                completion.await();
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                Ln.w("Interrupted while waiting for completion");
-            }
+            Looper.loop(); // interrupted by the Completion implementation
         } finally {
             if (cleanUp != null) {
                 cleanUp.interrupt();
@@ -231,9 +196,7 @@ public final class Server {
 
     private static void prepareMainLooper() {
         // Like Looper.prepareMainLooper(), but with quitAllowed set to true
-        if (Looper.myLooper() == null) {
-            Looper.prepare();
-        }
+        Looper.prepare();
         synchronized (Looper.class) {
             try {
                 @SuppressLint("DiscouragedPrivateApi")
@@ -261,29 +224,6 @@ public final class Server {
         }
     }
 
-    private static DaemonOptions parseDaemonOptions(String... args) {
-        DaemonOptions opts = new DaemonOptions();
-        for (String arg : args) {
-            if ("--daemon".equals(arg)) {
-                opts.setDaemonMode(true);
-            } else if (arg.startsWith("--port=")) {
-                try {
-                    int port = Integer.parseInt(arg.substring("--port=".length()));
-                    if (port >= 1024 && port <= 65535) {
-                        opts.setPort(port);
-                    }
-                } catch (NumberFormatException ignored) {
-                }
-            } else if (arg.startsWith("--bind_address=")) {
-                String address = arg.substring("--bind_address=".length());
-                if (!address.isEmpty()) {
-                    opts.setBindAddress(address);
-                }
-            }
-        }
-        return opts;
-    }
-
     private static void internalMain(String... args) throws Exception {
         Thread.UncaughtExceptionHandler defaultHandler = Thread.getDefaultUncaughtExceptionHandler();
         Thread.setDefaultUncaughtExceptionHandler((t, e) -> {
@@ -297,13 +237,36 @@ public final class Server {
 
         prepareMainLooper();
 
-        Options options = Options.parse(args);
-        DaemonOptions daemonOptions = parseDaemonOptions(args);
+        com.genymobile.scrcpy.daemon.DaemonOptions daemonOptions = com.genymobile.scrcpy.daemon.DaemonOptions.parse(args);
+        Options options;
+        if (daemonOptions.isDaemonMode()) {
+            String[] scrubbed = com.genymobile.scrcpy.daemon.DaemonArgs.strip(args);
+            options = Options.parse(scrubbed);
+        } else {
+            options = Options.parse(args);
+        }
 
         Ln.disableSystemStreams();
         Ln.initLogLevel(options.getLogLevel());
 
         Ln.i("Device: [" + Build.MANUFACTURER + "] " + Build.BRAND + " " + Build.MODEL + " (Android " + Build.VERSION.RELEASE + ")");
+
+        if (daemonOptions.isDaemonMode()) {
+            try {
+                com.genymobile.scrcpy.daemon.net.TcpServerSocketListener.initServerSocket(options.getScid(), daemonOptions.getPort(), daemonOptions.getBindAddress());
+            } catch (java.io.IOException e) {
+                Ln.e("Failed to initialize daemon server socket", e);
+                throw e;
+            }
+            try {
+                String[] scrubbed = com.genymobile.scrcpy.daemon.DaemonArgs.strip(args);
+                com.genymobile.scrcpy.daemon.DaemonServer daemonServer = new com.genymobile.scrcpy.daemon.DaemonServer(options, daemonOptions, scrubbed);
+                daemonServer.run();
+            } finally {
+                com.genymobile.scrcpy.daemon.net.TcpServerSocketListener.closeServerSocket();
+            }
+            return;
+        }
 
         if (options.getList()) {
             if (options.getCleanup()) {
@@ -330,21 +293,10 @@ public final class Server {
             return;
         }
 
-        if (daemonOptions.isDaemonMode()) {
-            try {
-                TcpDesktopConnection.initServerSocket(options.getScid(), daemonOptions.getPort(), daemonOptions.getBindAddress());
-            } catch (IOException e) {
-                Ln.e("Failed to initialize daemon server socket", e);
-                throw e;
-            }
-            try {
-                DaemonServer daemonServer = new DaemonServer(options, daemonOptions);
-                daemonServer.run();
-            } finally {
-                TcpDesktopConnection.closeServerSocket();
-            }
-        } else {
-            scrcpy(options, null);
+        try {
+            scrcpy(options);
+        } catch (ConfigurationException e) {
+            // Do not print stack trace, a user-friendly error-message has already been logged
         }
     }
 

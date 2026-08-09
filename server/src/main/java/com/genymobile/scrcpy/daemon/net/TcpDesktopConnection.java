@@ -1,4 +1,4 @@
-package com.genymobile.scrcpy.device;
+package com.genymobile.scrcpy.daemon.net;
 
 import com.genymobile.scrcpy.control.ControlChannel;
 import com.genymobile.scrcpy.util.IO;
@@ -11,8 +11,6 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.lang.reflect.Field;
-import java.net.InetSocketAddress;
-import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 
@@ -23,8 +21,6 @@ public final class TcpDesktopConnection implements Closeable {
     public static final int ROLE_CONTROL = 2;
 
     private static final int DEVICE_NAME_FIELD_LENGTH = 64;
-
-    private static ServerSocket persistentServerSocket;
 
     private Socket videoSocket;
     private FileDescriptor videoFd;
@@ -185,41 +181,6 @@ public final class TcpDesktopConnection implements Closeable {
         return null;
     }
 
-    public static synchronized void initServerSocket(int scid, int customPort, String bindAddress) throws IOException {
-        if (persistentServerSocket != null && !persistentServerSocket.isClosed()) {
-            return;
-        }
-        int port = getPort(scid, customPort);
-        persistentServerSocket = new ServerSocket();
-        persistentServerSocket.setReuseAddress(true);
-        persistentServerSocket.bind(new InetSocketAddress(bindAddress, port), 50);
-        Ln.i("TcpDesktopConnection: persistent ServerSocket bound to " + bindAddress + ":" + port);
-    }
-
-    public static synchronized ServerSocket getServerSocket() {
-        return persistentServerSocket;
-    }
-
-    public static synchronized void closeServerSocket() {
-        if (persistentServerSocket != null) {
-            try {
-                persistentServerSocket.close();
-                Ln.i("TcpDesktopConnection: persistent ServerSocket closed");
-            } catch (IOException e) {
-                Ln.w("TcpDesktopConnection: failed to close persistent ServerSocket", e);
-            }
-            persistentServerSocket = null;
-        }
-    }
-
-    public static Socket acceptNextSocket() throws IOException {
-        ServerSocket ss = persistentServerSocket;
-        if (ss == null || ss.isClosed()) {
-            throw new IOException("ServerSocket not initialized");
-        }
-        return ss.accept();
-    }
-
     public static int readSocketRole(Socket socket) throws IOException {
         InputStream in = socket.getInputStream();
         int role = in.read();
@@ -251,12 +212,5 @@ public final class TcpDesktopConnection implements Closeable {
             throw new IOException("Connection closed before sessionId received");
         }
         return (b1 << 24) | (b2 << 16) | (b3 << 8) | b4;
-    }
-
-    private static int getPort(int scid, int customPort) {
-        if (customPort != -1) {
-            return customPort;
-        }
-        return 27183;
     }
 }

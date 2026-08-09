@@ -1,4 +1,4 @@
-package com.genymobile.scrcpy.control;
+package com.genymobile.scrcpy.daemon.control;
 
 public enum ExecutionPolicy {
     FAST,

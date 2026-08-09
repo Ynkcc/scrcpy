@@ -335,9 +335,6 @@ public class Options {
 
         for (int i = 1; i < args.length; ++i) {
             String arg = args[i];
-            if (arg.startsWith("--")) {
-                continue;
-            }
             int equalIndex = arg.indexOf('=');
             if (equalIndex == -1) {
                 throw new IllegalArgumentException("Invalid key=value pair: \"" + arg + "\"");
@@ -706,67 +703,5 @@ public class Options {
             default:
                 throw new IllegalArgumentException("Invalid display IME policy: " + value);
         }
-    }
-
-    public Options copyWithDisplayId(int newDisplayId) {
-        Options copy = new Options();
-        copy.logLevel = this.logLevel;
-        copy.scid = this.scid;
-        copy.video = this.video;
-        copy.audio = this.audio;
-        copy.maxSize = this.maxSize;
-        copy.minSizeAlignment = this.minSizeAlignment;
-        copy.videoCodec = this.videoCodec;
-        copy.audioCodec = this.audioCodec;
-        copy.videoSource = this.videoSource;
-        copy.audioSource = this.audioSource;
-        copy.audioDup = this.audioDup;
-        copy.videoBitRate = this.videoBitRate;
-        copy.audioBitRate = this.audioBitRate;
-        copy.maxFps = this.maxFps;
-        copy.angle = this.angle;
-        copy.tunnelForward = this.tunnelForward;
-        copy.crop = this.crop;
-        copy.control = this.control;
-        copy.displayId = newDisplayId;
-        copy.cameraId = this.cameraId;
-        copy.cameraSize = this.cameraSize;
-        copy.cameraFacing = this.cameraFacing;
-        copy.cameraAspectRatio = this.cameraAspectRatio;
-        copy.cameraZoom = this.cameraZoom;
-        copy.cameraFps = this.cameraFps;
-        copy.cameraHighSpeed = this.cameraHighSpeed;
-        copy.cameraTorch = this.cameraTorch;
-        copy.showTouches = this.showTouches;
-        copy.stayAwake = this.stayAwake;
-        copy.screenOffTimeout = this.screenOffTimeout;
-        copy.displayImePolicy = this.displayImePolicy;
-        copy.videoCodecOptions = this.videoCodecOptions;
-        copy.audioCodecOptions = this.audioCodecOptions;
-        copy.videoEncoder = this.videoEncoder;
-        copy.audioEncoder = this.audioEncoder;
-        copy.powerOffScreenOnClose = this.powerOffScreenOnClose;
-        copy.clipboardAutosync = this.clipboardAutosync;
-        copy.downsizeOnError = this.downsizeOnError;
-        copy.cleanup = this.cleanup;
-        copy.powerOn = this.powerOn;
-        copy.newDisplay = this.newDisplay;
-        copy.vdDestroyContent = this.vdDestroyContent;
-        copy.vdSystemDecorations = this.vdSystemDecorations;
-        copy.flexDisplay = this.flexDisplay;
-        copy.keepActive = this.keepActive;
-        copy.ignoreVideoEncoderConstraints = this.ignoreVideoEncoderConstraints;
-        copy.captureOrientationLock = this.captureOrientationLock;
-        copy.captureOrientation = this.captureOrientation;
-        copy.listEncoders = this.listEncoders;
-        copy.listDisplays = this.listDisplays;
-        copy.listCameras = this.listCameras;
-        copy.listCameraSizes = this.listCameraSizes;
-        copy.listApps = this.listApps;
-        copy.sendDeviceMeta = this.sendDeviceMeta;
-        copy.sendFrameMeta = this.sendFrameMeta;
-        copy.sendDummyByte = this.sendDummyByte;
-        copy.sendStreamMeta = this.sendStreamMeta;
-        return copy;
     }
 }

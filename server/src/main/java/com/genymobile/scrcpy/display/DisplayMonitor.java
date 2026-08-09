@@ -36,6 +36,7 @@ public class DisplayMonitor {
 
     private Listener listener;
 
+    // 供守护进程模式在动态切换视频投屏源时，动态更新监视的屏幕 ID
     public synchronized void setDisplayId(int displayId) {
         this.displayId = displayId;
     }

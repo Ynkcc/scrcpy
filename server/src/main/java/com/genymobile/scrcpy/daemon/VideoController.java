@@ -1,4 +1,4 @@
-package com.genymobile.scrcpy;
+package com.genymobile.scrcpy.daemon;
 
 public interface VideoController {
     boolean startVideoStream(int displayId);

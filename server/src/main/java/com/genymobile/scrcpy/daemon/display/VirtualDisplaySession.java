@@ -1,4 +1,4 @@
-package com.genymobile.scrcpy;
+package com.genymobile.scrcpy.daemon.display;
 
 import com.genymobile.scrcpy.util.Ln;
 

@@ -111,8 +111,11 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
 
     // Used for resetting video encoding on RESET_VIDEO message or for sending camera controls
     private SurfaceCapture surfaceCapture;
+    private ControlMessageExtension extension;
 
-    private DaemonCommandHandler daemonCommandHandler;
+    public void setControlMessageExtension(ControlMessageExtension extension) {
+        this.extension = extension;
+    }
 
     public Controller(ControlChannel controlChannel, CleanUp cleanUp, Options options) {
         this.camera = options.getVideoSource() == VideoSource.CAMERA;
@@ -137,7 +140,6 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
         this.keepActive = options.getKeepActive();
         initPointers();
         sender = new DeviceMessageSender(controlChannel);
-        daemonCommandHandler = new DaemonCommandHandler(sender, this);
 
         supportsInputEvents = Device.supportsInputEvents(displayId);
         if (!supportsInputEvents) {
@@ -180,14 +182,6 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
 
     public void setSurfaceCapture(SurfaceCapture surfaceCapture) {
         this.surfaceCapture = surfaceCapture;
-    }
-
-    public SurfaceCapture getSurfaceCapture() {
-        return surfaceCapture;
-    }
-
-    public DaemonCommandHandler getDaemonCommandHandler() {
-        return daemonCommandHandler;
     }
 
     private UhidManager getUhidManager() {
@@ -238,7 +232,6 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
     }
 
     private void control() throws IOException {
-        Ln.i("Controller.control() started, camera=" + camera + ", displayId=" + displayId);
         // on start, power on the device
         if (!camera && powerOn && displayId == 0 && !Device.isScreenOn(displayId)) {
             Device.pressReleaseKeycode(KeyEvent.KEYCODE_POWER, displayId, Device.INJECT_MODE_ASYNC);
@@ -255,18 +248,8 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
 
         boolean alive = true;
         while (!Thread.currentThread().isInterrupted() && alive) {
-            try {
-                alive = handleEvent();
-                if (daemonCommandHandler != null && daemonCommandHandler.isExitDaemonRequested()) {
-                    Ln.i("Exit daemon requested, breaking control loop");
-                    alive = false;
-                }
-            } catch (RuntimeException e) {
-                Ln.e("Controller.handleEvent() RuntimeException", e);
-                alive = false;
-            }
+            alive = handleEvent();
         }
-        Ln.i("Controller.control() exiting, alive=" + alive + ", interrupted=" + Thread.currentThread().isInterrupted());
     }
 
     private void startKeepActiveThread() {
@@ -303,8 +286,6 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
                 control();
             } catch (IOException e) {
                 Ln.e("Controller error", e);
-            } catch (RuntimeException e) {
-                Ln.e("Controller fatal error", e);
             } finally {
                 Ln.d("Controller stopped");
                 if (uhidManager != null) {
@@ -330,9 +311,6 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
         if (sender != null) {
             sender.stop();
         }
-        if (daemonCommandHandler != null) {
-            daemonCommandHandler.close();
-        }
     }
 
     @Override
@@ -353,7 +331,7 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
             Ln.e("Control protocol error", e);
             return false;
         } catch (IOException e) {
-            Ln.i("ControlChannel.recv() IOException: " + e.getClass().getSimpleName() + ": " + e.getMessage());
+            // this is expected on close
             return false;
         }
 
@@ -464,8 +442,7 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
             }
         }
 
-        // Daemon commands (1000+)
-        if (daemonCommandHandler != null && daemonCommandHandler.handle(msg)) {
+        if (extension != null && extension.handle(msg)) {
             return true;
         }
 

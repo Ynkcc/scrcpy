@@ -1,23 +1,35 @@
-package com.genymobile.scrcpy.control;
+package com.genymobile.scrcpy.daemon.control;
 
-import com.genymobile.scrcpy.DaemonManager;
-import com.genymobile.scrcpy.VideoController;
+import com.genymobile.scrcpy.control.ControlMessage;
+import com.genymobile.scrcpy.control.ControlMessageExtension;
+import com.genymobile.scrcpy.control.Controller;
+import com.genymobile.scrcpy.control.DeviceMessage;
+import com.genymobile.scrcpy.control.DeviceMessageSender;
+import com.genymobile.scrcpy.control.DaemonDeviceMessages;
+import com.genymobile.scrcpy.control.DaemonControlMessages;
 import com.genymobile.scrcpy.device.Device;
+import com.genymobile.scrcpy.daemon.display.VirtualDisplayRegistry;
+import com.genymobile.scrcpy.daemon.display.DisplaySurfaceBroker;
+import com.genymobile.scrcpy.daemon.display.ActivityLauncher;
+import com.genymobile.scrcpy.daemon.DaemonExitCoordinator;
+import com.genymobile.scrcpy.daemon.VideoController;
 import com.genymobile.scrcpy.util.Ln;
-import com.genymobile.scrcpy.video.SurfaceCapture;
 import com.genymobile.scrcpy.video.ScreenCapture;
+import com.genymobile.scrcpy.video.SurfaceCapture;
 
 import android.os.Parcel;
 import android.view.InputEvent;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
 
+import java.io.IOException;
+import java.lang.reflect.Field;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-public class DaemonCommandHandler {
+public final class DaemonCommandHandler implements ControlMessageExtension {
 
     private static class HandlerEntry {
         final ExecutionPolicy policy;
@@ -29,30 +41,51 @@ public class DaemonCommandHandler {
         }
     }
 
+    private static Field surfaceCaptureField;
+    private static Field senderField;
+    static {
+        try {
+            surfaceCaptureField = Controller.class.getDeclaredField("surfaceCapture");
+            surfaceCaptureField.setAccessible(true);
+        } catch (Exception e) {
+            Ln.e("DaemonCommandHandler: Failed to make Controller.surfaceCapture field accessible", e);
+        }
+        try {
+            senderField = Controller.class.getDeclaredField("sender");
+            senderField.setAccessible(true);
+        } catch (Exception e) {
+            Ln.e("DaemonCommandHandler: Failed to make Controller.sender field accessible", e);
+        }
+    }
+
     private final DeviceMessageSender sender;
     private final Controller controller;
     private final CommandContext context;
 
+    private final VirtualDisplayRegistry registry;
+    private final DaemonExitCoordinator exitCoordinator;
+
     private final ExecutorService interactiveExecutor = Executors.newSingleThreadExecutor();
     private final ExecutorService lifecycleExecutor = Executors.newFixedThreadPool(2);
-    private final Map<Integer, HandlerEntry> registry = new HashMap<>();
+    private final Map<Integer, HandlerEntry> registryMap = new HashMap<>();
 
-    private VideoController videoController;
-
-    public DaemonCommandHandler(DeviceMessageSender sender, Controller controller) {
-        this.sender = sender;
+    public DaemonCommandHandler(Controller controller, 
+                                VirtualDisplayRegistry registry, DaemonExitCoordinator exitCoordinator,
+                                VideoController videoController) {
         this.controller = controller;
-        this.context = new CommandContext(sender, controller, null) {
-            @Override
-            public VideoController getVideoController() {
-                return videoController;
+        DeviceMessageSender s = null;
+        if (senderField != null) {
+            try {
+                s = (DeviceMessageSender) senderField.get(controller);
+            } catch (Exception e) {
+                Ln.e("DaemonCommandHandler: Failed to reflectively get Controller.sender", e);
             }
-        };
+        }
+        this.sender = s;
+        this.registry = registry;
+        this.exitCoordinator = exitCoordinator;
+        this.context = new CommandContext(s, controller, videoController);
         initRegistry();
-    }
-
-    public void setVideoController(VideoController videoController) {
-        this.videoController = videoController;
     }
 
     public void close() {
@@ -60,17 +93,13 @@ public class DaemonCommandHandler {
         lifecycleExecutor.shutdownNow();
     }
 
-    public boolean isExitDaemonRequested() {
-        return DaemonManager.getInstance().isExitDaemonRequested();
-    }
-
     private void register(int type, ExecutionPolicy policy, CommandHandler handler) {
-        registry.put(type, new HandlerEntry(policy, handler));
+        registryMap.put(type, new HandlerEntry(policy, handler));
     }
 
     private void initRegistry() {
-        register(ControlMessage.TYPE_CREATE_VIRTUAL_DISPLAY, ExecutionPolicy.SLOW, (msg, ctx) -> {
-            int newDisplayId = DaemonManager.getInstance().createVirtualDisplay(
+        register(DaemonControlMessages.TYPE_CREATE_VIRTUAL_DISPLAY, ExecutionPolicy.SLOW, (msg, ctx) -> {
+            int newDisplayId = registry.createVirtualDisplay(
                     msg.getText(), msg.getWidth(), msg.getHeight(), msg.getDpi(), msg.getFlags());
             if (newDisplayId == -1) {
                 throw new RuntimeException("FAILED");
@@ -78,16 +107,16 @@ public class DaemonCommandHandler {
             sendSuccessResponse(msg, newDisplayId, "OK");
         });
 
-        register(ControlMessage.TYPE_RELEASE_VIRTUAL_DISPLAY, ExecutionPolicy.SLOW, (msg, ctx) -> {
-            boolean ok = DaemonManager.getInstance().releaseVirtualDisplay(msg.getDisplayId());
+        register(DaemonControlMessages.TYPE_RELEASE_VIRTUAL_DISPLAY, ExecutionPolicy.SLOW, (msg, ctx) -> {
+            boolean ok = registry.releaseVirtualDisplay(msg.getDisplayId());
             if (!ok) {
                 throw new RuntimeException("FAILED");
             }
             sendSuccessResponse(msg, msg.getDisplayId(), "OK");
         });
 
-        register(ControlMessage.TYPE_RESIZE_VIRTUAL_DISPLAY, ExecutionPolicy.SLOW, (msg, ctx) -> {
-            boolean ok = DaemonManager.getInstance().resizeVirtualDisplay(
+        register(DaemonControlMessages.TYPE_RESIZE_VIRTUAL_DISPLAY, ExecutionPolicy.SLOW, (msg, ctx) -> {
+            boolean ok = registry.resizeVirtualDisplay(
                     msg.getDisplayId(), msg.getWidth(), msg.getHeight(), msg.getDpi());
             if (!ok) {
                 throw new RuntimeException("FAILED");
@@ -95,23 +124,23 @@ public class DaemonCommandHandler {
             sendSuccessResponse(msg, msg.getDisplayId(), "OK");
         });
 
-        register(ControlMessage.TYPE_START_ACTIVITY, ExecutionPolicy.SLOW, (msg, ctx) -> {
-            int result = DaemonManager.getInstance().startActivity(msg.getText(), msg.getDisplayId());
+        register(DaemonControlMessages.TYPE_START_ACTIVITY, ExecutionPolicy.SLOW, (msg, ctx) -> {
+            int result = ActivityLauncher.startActivity(msg.getText(), msg.getDisplayId());
             if (result < 0) {
                 throw new RuntimeException("FAILED");
             }
             sendSuccessResponse(msg, msg.getDisplayId(), "OK");
         });
 
-        register(ControlMessage.TYPE_GET_ACTIVE_DISPLAY_IDS, ExecutionPolicy.FAST, (msg, ctx) -> {
-            int[] ids = DaemonManager.getInstance().getActiveDisplayIds();
+        register(DaemonControlMessages.TYPE_GET_ACTIVE_DISPLAY_IDS, ExecutionPolicy.FAST, (msg, ctx) -> {
+            int[] ids = registry.getActiveDisplayIds();
             if (ctx.getSender() != null) {
-                DeviceMessage response = DeviceMessage.createActiveDisplaysResponse(msg.getSequence(), ids);
+                DeviceMessage response = DaemonDeviceMessages.createActiveDisplaysResponse(msg.getSequence(), ids);
                 ctx.getSender().send(response);
             }
         });
 
-        register(ControlMessage.TYPE_INJECT_INPUT_EVENT_WITH_DISPLAY_ID, ExecutionPolicy.FAST, (msg, ctx) -> {
+        register(DaemonControlMessages.TYPE_INJECT_INPUT_EVENT_WITH_DISPLAY_ID, ExecutionPolicy.FAST, (msg, ctx) -> {
             Parcel parcel = Parcel.obtain();
             parcel.unmarshall(msg.getData(), 0, msg.getData().length);
             parcel.setDataPosition(0);
@@ -152,23 +181,27 @@ public class DaemonCommandHandler {
             sendSuccessResponse(msg, targetDisplayId, "OK");
         });
 
-        register(ControlMessage.TYPE_SWITCH_DISPLAY, ExecutionPolicy.FAST, (msg, ctx) -> {
+        register(DaemonControlMessages.TYPE_SWITCH_DISPLAY, ExecutionPolicy.FAST, (msg, ctx) -> {
             int displayId = msg.getDisplayId();
-            boolean isValid = displayId == 0 || DaemonManager.getInstance().hasDisplay(displayId);
+            boolean isValid = displayId == 0 || registry.hasDisplay(displayId);
             if (!isValid) {
                 throw new RuntimeException("Display not found: " + displayId);
             }
-            DaemonManager.getInstance().setTargetDisplayId(displayId);
-            if (ctx.getController() != null) {
-                SurfaceCapture sc = ctx.getController().getSurfaceCapture();
-                if (sc instanceof ScreenCapture) {
-                    ((ScreenCapture) sc).setDisplayId(displayId);
+
+            if (ctx.getController() != null && surfaceCaptureField != null) {
+                try {
+                    SurfaceCapture sc = (SurfaceCapture) surfaceCaptureField.get(ctx.getController());
+                    if (sc instanceof ScreenCapture) {
+                        ((ScreenCapture) sc).setDisplayId(displayId);
+                    }
+                } catch (Exception e) {
+                    Ln.e("DaemonCommandHandler: Failed to reflectively access Controller.surfaceCapture", e);
                 }
             }
             sendSuccessResponse(msg, displayId, "OK");
         });
 
-        register(ControlMessage.TYPE_EXIT_DAEMON, ExecutionPolicy.FAST, (msg, ctx) -> {
+        register(DaemonControlMessages.TYPE_EXIT_DAEMON, ExecutionPolicy.FAST, (msg, ctx) -> {
             Ln.i("handleExitDaemon: Quit request received, replying OK and shutting down...");
             sendSuccessResponse(msg, -1, "OK");
 
@@ -177,12 +210,12 @@ public class DaemonCommandHandler {
                     Thread.sleep(100);
                 } catch (InterruptedException ignored) {
                 }
-                DaemonManager.getInstance().requestExitDaemon();
+                exitCoordinator.requestExit();
                 close();
             }).start();
         });
 
-        register(ControlMessage.TYPE_START_VIDEO_STREAM, ExecutionPolicy.SLOW, (msg, ctx) -> {
+        register(DaemonControlMessages.TYPE_START_VIDEO_STREAM, ExecutionPolicy.SLOW, (msg, ctx) -> {
             if (ctx.getVideoController() == null) {
                 throw new RuntimeException("Video controller not available");
             }
@@ -194,7 +227,7 @@ public class DaemonCommandHandler {
             sendSuccessResponse(msg, displayId, "OK");
         });
 
-        register(ControlMessage.TYPE_STOP_VIDEO_STREAM, ExecutionPolicy.SLOW, (msg, ctx) -> {
+        register(DaemonControlMessages.TYPE_STOP_VIDEO_STREAM, ExecutionPolicy.SLOW, (msg, ctx) -> {
             if (ctx.getVideoController() == null) {
                 throw new RuntimeException("Video controller not available");
             }
@@ -206,8 +239,9 @@ public class DaemonCommandHandler {
         });
     }
 
-    public boolean handle(ControlMessage msg) {
-        HandlerEntry entry = registry.get(msg.getType());
+    @Override
+    public boolean handle(ControlMessage msg) throws IOException {
+        HandlerEntry entry = registryMap.get(msg.getType());
         if (entry == null) {
             return false;
         }
@@ -237,7 +271,7 @@ public class DaemonCommandHandler {
     private void sendSuccessResponse(ControlMessage msg, int extraData, String text) {
         if (sender != null) {
             try {
-                DeviceMessage response = DeviceMessage.createGenericResponse(msg.getSequence(), 0, extraData, text);
+                DeviceMessage response = DaemonDeviceMessages.createGenericResponse(msg.getSequence(), 0, extraData, text);
                 sender.send(response);
             } catch (Exception e) {
                 Ln.e("Failed to send response", e);
@@ -249,7 +283,7 @@ public class DaemonCommandHandler {
         if (sender != null) {
             try {
                 String errorMsg = t.getMessage() != null ? t.getMessage() : t.toString();
-                DeviceMessage response = DeviceMessage.createGenericResponse(msg.getSequence(), -1, -1, errorMsg);
+                DeviceMessage response = DaemonDeviceMessages.createGenericResponse(msg.getSequence(), -1, -1, errorMsg);
                 sender.send(response);
             } catch (Exception e) {
                 Ln.e("Failed to send error response", e);
