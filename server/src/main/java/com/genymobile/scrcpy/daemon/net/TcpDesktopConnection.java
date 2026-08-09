@@ -22,11 +22,15 @@ public final class TcpDesktopConnection implements Closeable {
 
     private static final int DEVICE_NAME_FIELD_LENGTH = 64;
 
-    private Socket videoSocket;
-    private FileDescriptor videoFd;
+    // These fields are written from the accept thread (bindVideoSocket/
+    // bindAudioSocket) and read/closed from the session thread (hasVideo,
+    // getVideoFd, shutdown, close). Marking them volatile guarantees the
+    // session thread observes the latest bound socket instead of a stale null.
+    private volatile Socket videoSocket;
+    private volatile FileDescriptor videoFd;
 
-    private Socket audioSocket;
-    private FileDescriptor audioFd;
+    private volatile Socket audioSocket;
+    private volatile FileDescriptor audioFd;
 
     private final Socket controlSocket;
     private final ControlChannel controlChannel;

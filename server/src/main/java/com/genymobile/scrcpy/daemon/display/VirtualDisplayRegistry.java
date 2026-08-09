@@ -124,94 +124,99 @@ public final class VirtualDisplayRegistry {
     }
 
     public boolean resizeVirtualDisplay(int displayId, int width, int height, int dpi) {
-        VirtualDisplaySession session;
+        // Hold the registry lock for the whole resize so that a concurrent
+        // releaseVirtualDisplay cannot remove the session and call close()
+        // (which releases the VirtualDisplay / ImageReader) while we are
+        // still operating on them. The previous version released the lock
+        // right after get(), leaving a window for IllegalStateException /
+        // double-close / leaked newReader.
         synchronized (activeDisplaysLock) {
-            session = activeSessions.get(displayId);
-        }
-        if (session == null) {
-            Ln.w("VirtualDisplayRegistry: display id=" + displayId + " not found for resize");
-            return false;
-        }
-
-        try {
-            // DPI fallback: when the caller does not specify a DPI, query the live value
-            // from DisplayInfo so the virtual display keeps consistent density metadata.
-            if (dpi <= 0) {
-                try {
-                    DisplayInfo info = ServiceManager.getDisplayManager().getDisplayInfo(displayId);
-                    if (info != null && info.getDpi() > 0) {
-                        dpi = info.getDpi();
-                    }
-                } catch (Throwable t) {
-                    Ln.w("VirtualDisplayRegistry: failed to query DPI from DisplayInfo for displayId=" + displayId, t);
-                }
+            VirtualDisplaySession session = activeSessions.get(displayId);
+            if (session == null) {
+                Ln.w("VirtualDisplayRegistry: display id=" + displayId + " not found for resize");
+                return false;
             }
 
-            VirtualDisplay vd = session.getVirtualDisplay();
-            Surface externalSurface = session.getExternalSurface();
-            ImageReader oldReader = session.getImageReader();
-            HandlerThread readerThread = session.getReaderThread();
-
-            if (externalSurface != null) {
-                // An external surface (e.g. MediaCodec input surface) is bound and is
-                // size-flexible — the ImageReader is not the active render target, so
-                // recreating it would be wasted work. Just resize the virtual display.
-                vd.resize(width, height, dpi);
-                Ln.i("VirtualDisplayRegistry: resized virtual display id=" + displayId + " to " + width + "x" + height
-                        + "/" + dpi + " (external surface, reader untouched)");
-                return true;
-            }
-
-            if (oldReader == null || readerThread == null) {
-                // No reader to recreate — best-effort resize only.
-                vd.resize(width, height, dpi);
-                Ln.i("VirtualDisplayRegistry: resized virtual display id=" + displayId + " to " + width + "x" + height
-                        + "/" + dpi + " (no reader)");
-                return true;
-            }
-
-            // The ImageReader is the active surface. Recreate it atomically to avoid a
-            // no-surface window that would drop frames rendered during the swap.
-            //
-            // Order: create new reader -> bind new surface -> resize -> close old reader.
-            // The old surface is released only AFTER the new one is bound, so the display
-            // always has a valid render target. (The previous implementation closed the old
-            // reader before creating the new one, leaving a frame-drop window.)
-            ImageReader newReader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 2);
             try {
-                newReader.setOnImageAvailableListener(reader -> {
+                // DPI fallback: when the caller does not specify a DPI, query the live value
+                // from DisplayInfo so the virtual display keeps consistent density metadata.
+                if (dpi <= 0) {
                     try {
-                        android.media.Image img = reader.acquireLatestImage();
-                        if (img != null) {
-                            img.close();
+                        DisplayInfo info = ServiceManager.getDisplayManager().getDisplayInfo(displayId);
+                        if (info != null && info.getDpi() > 0) {
+                            dpi = info.getDpi();
                         }
                     } catch (Throwable t) {
-                        Ln.w("VirtualDisplayRegistry: ImageReader error after resize", t);
+                        Ln.w("VirtualDisplayRegistry: failed to query DPI from DisplayInfo for displayId=" + displayId, t);
                     }
-                }, new Handler(readerThread.getLooper()));
+                }
 
-                vd.setSurface(newReader.getSurface());
-                vd.resize(width, height, dpi);
-            } catch (Exception e) {
+                VirtualDisplay vd = session.getVirtualDisplay();
+                Surface externalSurface = session.getExternalSurface();
+                ImageReader oldReader = session.getImageReader();
+                HandlerThread readerThread = session.getReaderThread();
+
+                if (externalSurface != null) {
+                    // An external surface (e.g. MediaCodec input surface) is bound and is
+                    // size-flexible — the ImageReader is not the active render target, so
+                    // recreating it would be wasted work. Just resize the virtual display.
+                    vd.resize(width, height, dpi);
+                    Ln.i("VirtualDisplayRegistry: resized virtual display id=" + displayId + " to " + width + "x" + height
+                            + "/" + dpi + " (external surface, reader untouched)");
+                    return true;
+                }
+
+                if (oldReader == null || readerThread == null) {
+                    // No reader to recreate — best-effort resize only.
+                    vd.resize(width, height, dpi);
+                    Ln.i("VirtualDisplayRegistry: resized virtual display id=" + displayId + " to " + width + "x" + height
+                            + "/" + dpi + " (no reader)");
+                    return true;
+                }
+
+                // The ImageReader is the active surface. Recreate it atomically to avoid a
+                // no-surface window that would drop frames rendered during the swap.
+                //
+                // Order: create new reader -> bind new surface -> resize -> close old reader.
+                // The old surface is released only AFTER the new one is bound, so the display
+                // always has a valid render target. (The previous implementation closed the old
+                // reader before creating the new one, leaving a frame-drop window.)
+                ImageReader newReader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 2);
                 try {
-                    newReader.close();
+                    newReader.setOnImageAvailableListener(reader -> {
+                        try {
+                            android.media.Image img = reader.acquireLatestImage();
+                            if (img != null) {
+                                img.close();
+                            }
+                        } catch (Throwable t) {
+                            Ln.w("VirtualDisplayRegistry: ImageReader error after resize", t);
+                        }
+                    }, new Handler(readerThread.getLooper()));
+
+                    vd.setSurface(newReader.getSurface());
+                    vd.resize(width, height, dpi);
+                } catch (Exception e) {
+                    try {
+                        newReader.close();
+                    } catch (Exception ignore) {
+                    }
+                    throw e;
+                }
+
+                session.setImageReader(newReader);
+                try {
+                    oldReader.close();
                 } catch (Exception ignore) {
                 }
-                throw e;
-            }
 
-            session.setImageReader(newReader);
-            try {
-                oldReader.close();
-            } catch (Exception ignore) {
+                Ln.i("VirtualDisplayRegistry: resized virtual display id=" + displayId + " to " + width + "x" + height
+                        + "/" + dpi + " (reader swapped atomically)");
+                return true;
+            } catch (Exception e) {
+                Ln.e("VirtualDisplayRegistry: failed to resize virtual display id=" + displayId, e);
+                return false;
             }
-
-            Ln.i("VirtualDisplayRegistry: resized virtual display id=" + displayId + " to " + width + "x" + height
-                    + "/" + dpi + " (reader swapped atomically)");
-            return true;
-        } catch (Exception e) {
-            Ln.e("VirtualDisplayRegistry: failed to resize virtual display id=" + displayId, e);
-            return false;
         }
     }
 

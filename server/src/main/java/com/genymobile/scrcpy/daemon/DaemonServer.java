@@ -15,6 +15,7 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -116,10 +117,11 @@ public final class DaemonServer {
     }
 
     private void handleControlSocket(Socket socket) {
-        int sessionId = nextSessionId.getAndIncrement();
-        if (sessionId <= 0) {
-            sessionId = 1;
-        }
+        // Atomically reserve a session id in [1, Integer.MAX_VALUE]; wrap to 1
+        // on overflow. getAndUpdate is atomic, unlike the previous
+        // getAndIncrement + non-atomic reset-to-1 which could let two
+        // concurrent callers both pick the same (possibly 0 or negative) id.
+        int sessionId = nextSessionId.getAndUpdate(prev -> prev >= Integer.MAX_VALUE ? 1 : prev + 1);
 
         try {
             TcpDesktopConnection.writeSessionId(socket, sessionId);
@@ -131,7 +133,7 @@ public final class DaemonServer {
 
         ClientSession session;
         try {
-            session = new ClientSession(socket, sessionId, options, baseArgs, registry, surfaceBroker, exitCoordinator);
+            session = new ClientSession(socket, sessionId, options, baseArgs, registry, surfaceBroker, exitCoordinator, this);
         } catch (IOException e) {
             Ln.w("Failed to create client session: " + e.getMessage());
             try { socket.close(); } catch (IOException ignored) {}
@@ -141,7 +143,16 @@ public final class DaemonServer {
         sessions.put(sessionId, session);
         Ln.i("DaemonServer: new control session " + sessionId + " from " + socket.getRemoteSocketAddress());
 
-        clientExecutor.submit(session);
+        try {
+            clientExecutor.submit(session);
+        } catch (RejectedExecutionException e) {
+            // Executor was shut down between accept and submit (during daemon
+            // shutdown). Remove the map entry and tear down the session so the
+            // socket does not leak.
+            Ln.w("DaemonServer: rejected session " + sessionId + " (executor shut down?), cleaning up");
+            sessions.remove(sessionId);
+            session.shutdown();
+        }
     }
 
     private void handleVideoSocket(Socket socket) {
@@ -203,5 +214,10 @@ public final class DaemonServer {
         synchronized (running) {
             running.notifyAll();
         }
+    }
+
+    void removeSession(int sessionId) {
+        sessions.remove(sessionId);
+        Ln.i("DaemonServer: session " + sessionId + " removed");
     }
 }

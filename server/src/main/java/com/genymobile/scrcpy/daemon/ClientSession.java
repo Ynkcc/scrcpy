@@ -16,6 +16,8 @@ import com.genymobile.scrcpy.video.SurfaceEncoder;
 
 import java.io.IOException;
 import java.net.Socket;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 public final class ClientSession implements VideoController, Runnable {
@@ -27,6 +29,7 @@ public final class ClientSession implements VideoController, Runnable {
     private final VirtualDisplayRegistry registry;
     private final DisplaySurfaceBroker surfaceBroker;
     private final DaemonExitCoordinator exitCoordinator;
+    private final DaemonServer server;
 
     private Controller controller;
     private DaemonCommandHandler daemonCommandHandler;
@@ -39,9 +42,13 @@ public final class ClientSession implements VideoController, Runnable {
     private final AtomicBoolean exited = new AtomicBoolean(false);
     private Thread videoThread;
 
+    // Signaled once the first video socket is bound to the connection, so that
+    // startVideoStream can wait for it WITHOUT holding the session lock.
+    private final CountDownLatch videoSocketLatch = new CountDownLatch(1);
+
     public ClientSession(Socket controlSocket, int sessionId, Options options, String[] baseArgs,
                          VirtualDisplayRegistry registry, DisplaySurfaceBroker surfaceBroker, 
-                         DaemonExitCoordinator exitCoordinator) throws IOException {
+                         DaemonExitCoordinator exitCoordinator, DaemonServer server) throws IOException {
         this.sessionId = sessionId;
         this.connection = new TcpDesktopConnection(controlSocket, sessionId);
         this.options = options;
@@ -49,6 +56,7 @@ public final class ClientSession implements VideoController, Runnable {
         this.registry = registry;
         this.surfaceBroker = surfaceBroker;
         this.exitCoordinator = exitCoordinator;
+        this.server = server;
     }
 
     @Override
@@ -76,6 +84,7 @@ public final class ClientSession implements VideoController, Runnable {
                     Ln.i("Session[" + sessionId + "]: calling controller.start()");
                     controller.start(fatalError -> {
                         Ln.i("Session[" + sessionId + "]: controller terminated, fatal=" + fatalError);
+                        controller.stop();
                     });
                     Ln.i("Session[" + sessionId + "]: controller.start() returned, joining...");
                     controller.join();
@@ -105,76 +114,95 @@ public final class ClientSession implements VideoController, Runnable {
     }
 
     @Override
-    public synchronized boolean startVideoStream(int displayId) {
-        if (videoStarted.get()) {
-            Ln.w("Session[" + sessionId + "]: video already started for display " + displayId);
+    public boolean startVideoStream(int displayId) {
+        if (exited.get()) {
+            Ln.w("Session[" + sessionId + "]: session exiting, cannot start video stream");
             return false;
         }
 
-        Ln.i("Session[" + sessionId + "]: start video stream for displayId=" + displayId);
-
+        // Wait for the video socket OUTSIDE the session lock. The previous
+        // implementation polled connection.hasVideo() while holding `this`,
+        // which blocked a concurrent stop/shutdown for up to 10s.
         try {
             ensureVideoFdReady();
+        } catch (IOException e) {
+            Ln.e("Session[" + sessionId + "]: video socket not ready for displayId=" + displayId, e);
+            return false;
+        }
 
-            String[] modifiedArgs = DaemonArgs.changeDisplayId(baseArgs, displayId);
-            Options captureOptions = Options.parse(modifiedArgs);
-
-            videoStreamer = new Streamer(connection.getVideoFd(), options.getVideoCodec(),
-                    options.getSendStreamMeta(), options.getSendFrameMeta());
-
-            ScreenCapture screen = new ScreenCapture(
-                    controller != null ? controller : (id, pm) -> {},
-                    captureOptions);
-            screen.setExternalDisplayProvider(surfaceBroker);
-            surfaceCapture = screen;
-            surfaceEncoder = new SurfaceEncoder(surfaceCapture, videoStreamer, captureOptions);
-
-            if (controller != null) {
-                controller.setSurfaceCapture(surfaceCapture);
+        synchronized (this) {
+            if (exited.get()) {
+                Ln.w("Session[" + sessionId + "]: session exited while waiting for video socket");
+                return false;
+            }
+            if (videoStarted.get()) {
+                Ln.w("Session[" + sessionId + "]: video already started for display " + displayId);
+                return false;
             }
 
-            videoStarted.set(true);
+            Ln.i("Session[" + sessionId + "]: start video stream for displayId=" + displayId);
 
-            videoThread = new Thread(() -> {
-                try {
-                    surfaceEncoder.start(fatalError -> {
-                        Ln.i("Session[" + sessionId + "]: video encoder terminated, fatal=" + fatalError);
-                        videoStarted.set(false);
-                    });
-                    surfaceEncoder.join();
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
+            try {
+                String[] modifiedArgs = DaemonArgs.changeDisplayId(baseArgs, displayId);
+                Options captureOptions = Options.parse(modifiedArgs);
+
+                videoStreamer = new Streamer(connection.getVideoFd(), options.getVideoCodec(),
+                        options.getSendStreamMeta(), options.getSendFrameMeta());
+
+                ScreenCapture screen = new ScreenCapture(
+                        controller != null ? controller : (id, pm) -> {},
+                        captureOptions);
+                screen.setExternalDisplayProvider(surfaceBroker);
+                surfaceCapture = screen;
+                surfaceEncoder = new SurfaceEncoder(surfaceCapture, videoStreamer, captureOptions);
+
+                if (controller != null) {
+                    controller.setSurfaceCapture(surfaceCapture);
                 }
-            }, "video-" + sessionId + "-" + displayId);
-            videoThread.setDaemon(true);
-            videoThread.start();
 
-            Ln.i("Session[" + sessionId + "]: video stream started for display " + displayId);
-            return true;
-        } catch (Exception e) {
-            Ln.e("Session[" + sessionId + "]: failed to start video stream", e);
-            videoStarted.set(false);
-            stopVideoInternal();
-            return false;
+                videoStarted.set(true);
+
+                videoThread = new Thread(() -> {
+                    try {
+                        surfaceEncoder.start(fatalError -> {
+                            Ln.i("Session[" + sessionId + "]: video encoder terminated, fatal=" + fatalError);
+                            videoStarted.set(false);
+                        });
+                        surfaceEncoder.join();
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                }, "video-" + sessionId + "-" + displayId);
+                videoThread.setDaemon(true);
+                videoThread.start();
+
+                Ln.i("Session[" + sessionId + "]: video stream started for display " + displayId);
+                return true;
+            } catch (Exception e) {
+                Ln.e("Session[" + sessionId + "]: failed to start video stream", e);
+                videoStarted.set(false);
+                stopVideoInternal();
+                return false;
+            }
         }
     }
 
-    private void ensureVideoFdReady() throws IOException, InterruptedException {
+    private void ensureVideoFdReady() throws IOException {
         if (connection.hasVideo() && connection.getVideoFd() != null) {
             return;
         }
 
         Ln.i("Session[" + sessionId + "]: waiting for video socket...");
-        int waitCount = 0;
-        while (!connection.hasVideo() && waitCount < 50) {
-            Thread.sleep(200);
-            waitCount++;
+        try {
+            if (!videoSocketLatch.await(10, TimeUnit.SECONDS)) {
+                throw new IOException("Video socket not connected within timeout");
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IOException("Interrupted while waiting for video socket");
         }
 
-        if (!connection.hasVideo()) {
-            throw new IOException("Video socket not connected within timeout");
-        }
-        if (connection.getVideoFd() == null) {
+        if (!connection.hasVideo() || connection.getVideoFd() == null) {
             throw new IOException("Video socket has no valid file descriptor");
         }
         Ln.i("Session[" + sessionId + "]: video socket ready");
@@ -190,7 +218,10 @@ public final class ClientSession implements VideoController, Runnable {
         return true;
     }
 
-    private void stopVideoInternal() {
+    // Single video-teardown entry point. Synchronized so that concurrent
+    // callers (stopVideoStream, cleanup, failed startVideoStream) serialize
+    // instead of double-releasing surfaceEncoder/surfaceCapture/videoThread.
+    private synchronized void stopVideoInternal() {
         videoStarted.set(false);
         if (surfaceEncoder != null) {
             surfaceEncoder.stop();
@@ -225,6 +256,7 @@ public final class ClientSession implements VideoController, Runnable {
     public void onVideoSocket(Socket socket) {
         try {
             connection.bindVideoSocket(socket);
+            videoSocketLatch.countDown();
         } catch (IOException e) {
             Ln.e("Session[" + sessionId + "]: failed to bind video socket", e);
         }
@@ -266,6 +298,9 @@ public final class ClientSession implements VideoController, Runnable {
 
             connection.shutdown();
             connection.close();
+            if (server != null) {
+                server.removeSession(sessionId);
+            }
         }
     }
 }

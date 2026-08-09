@@ -27,6 +27,7 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 
 public final class DaemonCommandHandler implements ControlMessageExtension {
 
@@ -220,11 +221,6 @@ public final class DaemonCommandHandler implements ControlMessageExtension {
             return false;
         }
 
-        if (interactiveExecutor.isShutdown() || lifecycleExecutor.isShutdown()) {
-            Ln.w("DaemonCommandHandler: executor already shutdown, ignoring message type=" + msg.getType());
-            return false;
-        }
-
         Runnable task = () -> {
             try {
                 entry.handler.handle(msg, context);
@@ -234,10 +230,21 @@ public final class DaemonCommandHandler implements ControlMessageExtension {
             }
         };
 
-        if (entry.policy == ExecutionPolicy.FAST) {
-            interactiveExecutor.submit(task);
-        } else {
-            lifecycleExecutor.submit(task);
+        // submit() is the source of truth for executor state. The previous
+        // isShutdown() check was racy (close() could shutdownNow() between the
+        // check and submit), and an uncaught RejectedExecutionException would
+        // propagate through Controller.handleEvent and terminate the
+        // control-recv thread. Catch it here and report the message as
+        // unhandled instead.
+        try {
+            if (entry.policy == ExecutionPolicy.FAST) {
+                interactiveExecutor.submit(task);
+            } else {
+                lifecycleExecutor.submit(task);
+            }
+        } catch (RejectedExecutionException e) {
+            Ln.w("DaemonCommandHandler: executor rejected message type=" + msg.getType() + " (shutting down?)");
+            return false;
         }
         return true;
     }
