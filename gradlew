@@ -82,6 +82,13 @@ esac
 
 CLASSPATH=$APP_HOME/gradle/wrapper/gradle-wrapper.jar
 
+# Auto-detect Java 21 for server builds if JAVA_HOME is not explicitly set
+JAVA_21_HOME="/usr/lib/jvm/java-21-openjdk"
+if [ -z "$JAVA_HOME" ] && [ -x "$JAVA_21_HOME/bin/java" ] ; then
+    JAVA_HOME="$JAVA_21_HOME"
+    export JAVA_HOME
+fi
+
 # Determine the Java command to use to start the JVM.
 if [ -n "$JAVA_HOME" ] ; then
     if [ -x "$JAVA_HOME/jre/sh/java" ] ; then
