@@ -38,7 +38,10 @@ public final class ClientSession implements Runnable {
 
     private Controller controller;
     private DaemonCommandHandler daemonCommandHandler;
-    private SessionVideoController videoController;
+    // Written in run() (clientExecutor thread), read in onVideoSocket()
+    // (daemon-accept thread). Volatile so onVideoSocket observes the wired
+    // reference instead of a stale null.
+    private volatile SessionVideoController videoController;
     private ControlLoopRunner controlLoopRunner;
 
     public ClientSession(Socket controlSocket, int sessionId, Options options, String[] baseArgs,
@@ -119,10 +122,29 @@ public final class ClientSession implements Runnable {
     }
 
     public void onVideoSocket(Socket socket) {
-        if (videoController != null) {
-            videoController.bindVideoSocket(socket);
-        } else {
-            try { socket.close(); } catch (IOException ignored) {}
+        // The client opens the video socket immediately after reading deviceMeta
+        // (sent at the top of run()). videoController is only assigned later in
+        // run(), after the (heavy) Controller construction — so the socket
+        // routinely arrives before videoController exists. Previously this branch
+        // silently closed the socket, which made ensureVideoFdReady time out
+        // (connection.hasVideo() stayed false and videoSocketLatch never counted
+        // down).
+        //
+        // Bind directly to the connection (final, created in the ctor, always
+        // non-null). When startVideoStream later runs, connection.hasVideo()
+        // returns true and ensureVideoFdReady returns without awaiting the latch.
+        // If videoController is already wired (startVideoStream already waiting),
+        // let it bind + release the latch.
+        SessionVideoController vc = this.videoController;
+        if (vc != null) {
+            vc.bindVideoSocket(socket);
+            return;
+        }
+        try {
+            connection.bindVideoSocket(socket);
+            Ln.i("Session[" + sessionId + "]: video socket bound early (videoController not yet created)");
+        } catch (IOException e) {
+            Ln.e("Session[" + sessionId + "]: failed to bind early video socket", e);
         }
     }
 

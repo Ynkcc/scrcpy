@@ -143,25 +143,20 @@ public final class TcpDesktopConnection implements Closeable {
         int len = StringUtils.getUtf8TruncationIndex(deviceNameBytes, DEVICE_NAME_FIELD_LENGTH - 1);
         System.arraycopy(deviceNameBytes, 0, buffer, 0, len);
 
-        Socket firstSocket = getFirstSocket();
-        if (firstSocket == null) {
-            throw new IOException("No socket available to send device metadata");
+        // Always send deviceMeta on the control socket. The previous
+        // getFirstSocket() could route the 64-byte device name to the video
+        // socket if it was bound before sendDeviceMeta ran (race between the
+        // accept thread binding the video socket and the session thread calling
+        // sendDeviceMeta at the top of run()). That would corrupt the video
+        // stream with 64 bytes of device name prepended before frame headers.
+        if (controlSocket == null) {
+            throw new IOException("No control socket available to send device metadata");
         }
-        FileDescriptor fd = getFileDescriptor(firstSocket);
+        FileDescriptor fd = getFileDescriptor(controlSocket);
         if (fd == null) {
             throw new IOException("Could not get file descriptor for device metadata transmission");
         }
         IO.writeFully(fd, buffer, 0, buffer.length);
-    }
-
-    private Socket getFirstSocket() {
-        if (videoSocket != null) {
-            return videoSocket;
-        }
-        if (audioSocket != null) {
-            return audioSocket;
-        }
-        return controlSocket;
     }
 
     private static FileDescriptor getFileDescriptor(Socket socket) {

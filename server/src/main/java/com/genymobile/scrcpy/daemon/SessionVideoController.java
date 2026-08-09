@@ -11,8 +11,6 @@ import com.genymobile.scrcpy.video.SurfaceEncoder;
 import java.io.FileDescriptor;
 import java.io.IOException;
 import java.net.Socket;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BooleanSupplier;
 
@@ -26,9 +24,9 @@ import java.util.function.BooleanSupplier;
  *   <li>build the capture pipeline via {@link DaemonVideoPipeline};</li>
  *   <li>drive the {@code videoThread} (encoder start/join) and its termination callback;</li>
  *   <li>serialized teardown ({@link #stopVideoInternal}) preserving the original concurrency
- *       hardening: {@code videoSocketLatch} awaited outside the session lock, and
- *       {@code videoThread.join(2000)} to prevent the start→stop→start callback race
- *       (see project_memory lessons).</li>
+ *       hardening: {@code videoSocketReady} flag + {@code videoSocketLock} awaited outside
+ *       the session lock, and {@code videoThread.join(2000)} to prevent the start→stop→start
+ *       callback race (see project_memory lessons).</li>
  * </ul>
  *
  * <p>The session-level exit flag is queried via the injected {@link BooleanSupplier} so this
@@ -51,9 +49,15 @@ public final class SessionVideoController implements VideoController {
     private final AtomicBoolean videoStarted = new AtomicBoolean(false);
     private Thread videoThread;
 
-    // Signaled once the first video socket is bound to the connection, so that
-    // startVideoStream can wait for it WITHOUT holding the session lock.
-    private final CountDownLatch videoSocketLatch = new CountDownLatch(1);
+    // Replaces the previous CountDownLatch(1). Once a video socket is bound
+    // (initial or reconnection), the flag stays true for the lifetime of the
+    // session. ensureVideoFdReady uses this flag + wait/notify to block until
+    // the first video socket arrives. Subsequent startVideoStream calls use
+    // the fast path (the socket is already bound). The client-side 50ms delay
+    // after reconnectVideoSocket() ensures the accept loop has bound the new
+    // socket before 209 arrives, so the fast path always sees the latest FD.
+    private final Object videoSocketLock = new Object();
+    private volatile boolean videoSocketReady = false;
 
     /**
      * Abstracts the video-socket-bearing connection so this class does not depend on the full
@@ -76,6 +80,13 @@ public final class SessionVideoController implements VideoController {
         this.baseArgs = baseArgs;
         this.surfaceBroker = surfaceBroker;
         this.isSessionExited = isSessionExited;
+
+        // If the video socket was bound early (before this controller was created,
+        // via ClientSession.onVideoSocket → connection.bindVideoSocket), mark it as
+        // ready so ensureVideoFdReady's fast path works without waiting.
+        if (videoBinding.hasVideo() && videoBinding.getVideoFd() != null) {
+            videoSocketReady = true;
+        }
     }
 
     /** Late-wire the controller once the session has constructed it. */
@@ -147,22 +158,29 @@ public final class SessionVideoController implements VideoController {
     }
 
     private void ensureVideoFdReady() throws IOException {
-        if (videoBinding.hasVideo() && videoBinding.getVideoFd() != null) {
+        // Fast path: video socket is ready and has a valid FD
+        if (videoSocketReady && videoBinding.hasVideo() && videoBinding.getVideoFd() != null) {
             return;
         }
 
         Ln.i("Session[" + sessionId + "]: waiting for video socket...");
-        try {
-            if (!videoSocketLatch.await(10, TimeUnit.SECONDS)) {
-                throw new IOException("Video socket not connected within timeout");
+        synchronized (videoSocketLock) {
+            long deadline = System.currentTimeMillis() + 10_000;
+            while (!videoSocketReady || !videoBinding.hasVideo() || videoBinding.getVideoFd() == null) {
+                if (isSessionExited.getAsBoolean()) {
+                    throw new IOException("Session exiting while waiting for video socket");
+                }
+                long remaining = deadline - System.currentTimeMillis();
+                if (remaining <= 0) {
+                    throw new IOException("Video socket not connected within timeout");
+                }
+                try {
+                    videoSocketLock.wait(remaining);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new IOException("Interrupted while waiting for video socket");
+                }
             }
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new IOException("Interrupted while waiting for video socket");
-        }
-
-        if (!videoBinding.hasVideo() || videoBinding.getVideoFd() == null) {
-            throw new IOException("Video socket has no valid file descriptor");
         }
         Ln.i("Session[" + sessionId + "]: video socket ready");
     }
@@ -216,7 +234,10 @@ public final class SessionVideoController implements VideoController {
     public void bindVideoSocket(Socket socket) {
         try {
             videoBinding.bindVideoSocket(socket);
-            videoSocketLatch.countDown();
+            synchronized (videoSocketLock) {
+                videoSocketReady = true;
+                videoSocketLock.notifyAll();
+            }
         } catch (IOException e) {
             Ln.e("Session[" + sessionId + "]: failed to bind video socket", e);
         }

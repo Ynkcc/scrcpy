@@ -56,6 +56,10 @@ public class ScreenCapture extends SurfaceCapture {
         }
     }
 
+    public int getDisplayId() {
+        return displayId;
+    }
+
     private VideoConstraints videoConstraints;
 
     private DisplayInfo displayInfo;

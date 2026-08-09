@@ -328,10 +328,24 @@ public class SurfaceEncoder implements AsyncProcessor {
             // output 1 frame as soon as 1 frame is queued
             format.setInteger(MediaFormat.KEY_LATENCY, 1);
         }
+        // Higher bitrate mode for better quality: CBR is default but hint for quality
+        format.setInteger(MediaFormat.KEY_BITRATE_MODE, MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR);
+        // H.264 High profile when possible (Baseline Profile = 1, Main = 2, High = 8)
+        if (MediaFormat.MIMETYPE_VIDEO_AVC.equals(videoMimeType)) {
+            try {
+                format.setInteger(MediaFormat.KEY_PROFILE, MediaCodecInfo.CodecProfileLevel.AVCProfileHigh);
+                format.setInteger(MediaFormat.KEY_LEVEL, MediaCodecInfo.CodecProfileLevel.AVCLevel4);
+            } catch (Throwable t) {
+                Ln.w("SurfaceEncoder: High profile not available, falling back to default");
+            }
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            try {
+                format.setInteger(MediaFormat.KEY_OPERATING_RATE, Short.MAX_VALUE & 0xFFFF);
+            } catch (Throwable ignore) {
+            }
+        }
         if (maxFps > 0) {
-            // The key existed privately before Android 10:
-            // <https://android.googlesource.com/platform/frameworks/base/+/625f0aad9f7a259b6881006ad8710adce57d1384%5E%21/>
-            // <https://github.com/Genymobile/scrcpy/issues/488#issuecomment-567321437>
             format.setFloat(KEY_MAX_FPS_TO_ENCODER, maxFps);
         }
 
