@@ -50,33 +50,37 @@ public final class DaemonServer {
     public void run() throws IOException {
         Ln.i("DaemonServer starting on port " + daemonOptions.getPort() + ", bind=" + daemonOptions.getBindAddress());
 
-        acceptExecutor = Executors.newSingleThreadExecutor(r -> {
-            Thread t = new Thread(r, "daemon-accept");
-            t.setDaemon(true);
-            return t;
-        });
-        clientExecutor = Executors.newFixedThreadPool(MAX_SESSIONS, r -> {
-            Thread t = new Thread(() -> {
-                Looper.prepare();
-                r.run();
-            }, "daemon-client");
-            t.setDaemon(true);
-            return t;
-        });
-
-        acceptExecutor.submit(this::acceptLoop);
-
         try {
-            synchronized (running) {
-                while (running.get()) {
-                    running.wait();
-                }
-            }
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-        }
+            TcpServerSocketListener.initServerSocket(options.getScid(), daemonOptions.getPort(), daemonOptions.getBindAddress());
 
-        shutdown();
+            acceptExecutor = Executors.newSingleThreadExecutor(r -> {
+                Thread t = new Thread(r, "daemon-accept");
+                t.setDaemon(true);
+                return t;
+            });
+            clientExecutor = Executors.newFixedThreadPool(MAX_SESSIONS, r -> {
+                Thread t = new Thread(() -> {
+                    Looper.prepare();
+                    r.run();
+                }, "daemon-client");
+                t.setDaemon(true);
+                return t;
+            });
+
+            acceptExecutor.submit(this::acceptLoop);
+
+            try {
+                synchronized (running) {
+                    while (running.get()) {
+                        running.wait();
+                    }
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        } finally {
+            shutdown();
+        }
     }
 
     private void acceptLoop() {

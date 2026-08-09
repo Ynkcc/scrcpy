@@ -12,7 +12,6 @@ import com.genymobile.scrcpy.control.Controller;
 import com.genymobile.scrcpy.daemon.DaemonArgs;
 import com.genymobile.scrcpy.daemon.DaemonOptions;
 import com.genymobile.scrcpy.daemon.DaemonServer;
-import com.genymobile.scrcpy.daemon.net.TcpServerSocketListener;
 import com.genymobile.scrcpy.device.DesktopConnection;
 import com.genymobile.scrcpy.device.Device;
 import com.genymobile.scrcpy.device.Streamer;
@@ -251,18 +250,9 @@ public final class Server {
         Ln.i("Device: [" + Build.MANUFACTURER + "] " + Build.BRAND + " " + Build.MODEL + " (Android " + Build.VERSION.RELEASE + ")");
 
         if (daemonOptions.isDaemonMode()) {
-            try {
-                TcpServerSocketListener.initServerSocket(options.getScid(), daemonOptions.getPort(), daemonOptions.getBindAddress());
-            } catch (IOException e) {
-                Ln.e("Failed to initialize daemon server socket", e);
-                throw e;
-            }
-            try {
-                DaemonServer daemonServer = new DaemonServer(options, daemonOptions, scrubbed);
-                daemonServer.run();
-            } finally {
-                TcpServerSocketListener.closeServerSocket();
-            }
+            // DaemonServer owns its TCP server socket lifecycle (init on run,
+            // close on shutdown) so this entry point only dispatches.
+            new DaemonServer(options, daemonOptions, scrubbed).run();
             return;
         }
 
