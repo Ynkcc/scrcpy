@@ -40,6 +40,8 @@ public final class ControlMessage {
     public static final int TYPE_INJECT_INPUT_EVENT_WITH_DISPLAY_ID = 206;
     public static final int TYPE_SWITCH_DISPLAY = 207;
     public static final int TYPE_EXIT_DAEMON = 208;
+    public static final int TYPE_START_VIDEO_STREAM = 209;
+    public static final int TYPE_STOP_VIDEO_STREAM = 210;
 
     public static final long SEQUENCE_INVALID = 0;
 
@@ -260,6 +262,21 @@ public final class ControlMessage {
         ControlMessage msg = new ControlMessage();
         msg.type = TYPE_SWITCH_DISPLAY;
         msg.displayId = displayId;
+        return msg;
+    }
+
+    public static ControlMessage createStartVideoStream(long sequence, int displayId) {
+        ControlMessage msg = new ControlMessage();
+        msg.type = TYPE_START_VIDEO_STREAM;
+        msg.displayId = displayId;
+        msg.setSequence(sequence);
+        return msg;
+    }
+
+    public static ControlMessage createStopVideoStream(long sequence) {
+        ControlMessage msg = new ControlMessage();
+        msg.type = TYPE_STOP_VIDEO_STREAM;
+        msg.setSequence(sequence);
         return msg;
     }
 

@@ -88,6 +88,15 @@ public class ControlMessageReader {
                 msg.setSequence(sequence);
                 return msg;
             }
+            case ControlMessage.TYPE_START_VIDEO_STREAM: {
+                long sequence = dis.readLong();
+                int displayId = dis.readInt();
+                return ControlMessage.createStartVideoStream(sequence, displayId);
+            }
+            case ControlMessage.TYPE_STOP_VIDEO_STREAM: {
+                long sequence = dis.readLong();
+                return ControlMessage.createStopVideoStream(sequence);
+            }
             default:
                 throw new ControlProtocolException("Unknown event type: " + type);
         }

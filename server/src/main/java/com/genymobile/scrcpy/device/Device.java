@@ -64,7 +64,7 @@ public final class Device {
             throw new AssertionError("Could not inject input event if !supportsInputEvents()");
         }
 
-        if (displayId != 0 && !InputManager.setDisplayId(inputEvent, displayId)) {
+        if (displayId >= 0 && !InputManager.setDisplayId(inputEvent, displayId)) {
             return false;
         }
 
