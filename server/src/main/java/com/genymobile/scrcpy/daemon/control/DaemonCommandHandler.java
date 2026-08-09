@@ -56,8 +56,14 @@ public final class DaemonCommandHandler implements ControlMessageExtension {
     public DaemonCommandHandler(Controller controller,
                                 VirtualDisplayRegistry registry, DaemonExitCoordinator exitCoordinator,
                                 VideoController videoController) {
+        this(controller != null ? controller.getDeviceMessageSender() : null, controller, registry, exitCoordinator, videoController);
+    }
+
+    public DaemonCommandHandler(DeviceMessageSender sender, Controller controller,
+                                VirtualDisplayRegistry registry, DaemonExitCoordinator exitCoordinator,
+                                VideoController videoController) {
         this.controller = controller;
-        this.sender = controller.getDeviceMessageSender();
+        this.sender = sender;
         this.registry = registry;
         this.exitCoordinator = exitCoordinator;
         this.rotationController = new RotationController(registry);

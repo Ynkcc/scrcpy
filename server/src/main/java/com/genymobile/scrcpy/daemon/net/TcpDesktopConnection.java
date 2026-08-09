@@ -19,6 +19,7 @@ public final class TcpDesktopConnection implements Closeable {
     public static final int ROLE_VIDEO = 0;
     public static final int ROLE_AUDIO = 1;
     public static final int ROLE_CONTROL = 2;
+    public static final int ROLE_NEGOTIATION = 3;
 
     private static final int DEVICE_NAME_FIELD_LENGTH = 64;
 
@@ -32,15 +33,28 @@ public final class TcpDesktopConnection implements Closeable {
     private volatile Socket audioSocket;
     private volatile FileDescriptor audioFd;
 
-    private final Socket controlSocket;
-    private final ControlChannel controlChannel;
+    private volatile Socket controlSocket;
+    private volatile ControlChannel controlChannel;
+
+    private final Socket negotiationSocket;
+    private final ControlChannel negotiationChannel;
 
     private final int sessionId;
 
-    public TcpDesktopConnection(Socket controlSocket, int sessionId) throws IOException {
-        this.controlSocket = controlSocket;
+    public TcpDesktopConnection(Socket negotiationSocket, int sessionId) throws IOException {
+        this.negotiationSocket = negotiationSocket;
         this.sessionId = sessionId;
-        this.controlChannel = controlSocket != null ? new ControlChannel(controlSocket.getInputStream(), controlSocket.getOutputStream()) : null;
+        this.negotiationChannel = negotiationSocket != null ? new ControlChannel(negotiationSocket.getInputStream(), negotiationSocket.getOutputStream()) : null;
+    }
+
+    public void bindControlSocket(Socket controlSocket) throws IOException {
+        if (this.controlSocket != null) {
+            Ln.i("bindControlSocket: replacing stale control socket for session " + sessionId);
+            closeQuietly(this.controlSocket);
+        }
+        this.controlSocket = controlSocket;
+        this.controlChannel = new ControlChannel(controlSocket.getInputStream(), controlSocket.getOutputStream());
+        Ln.i("TcpDesktopConnection[" + sessionId + "]: control socket bound");
     }
 
     public void bindVideoSocket(Socket videoSocket) throws IOException {
@@ -82,6 +96,10 @@ public final class TcpDesktopConnection implements Closeable {
         return controlChannel;
     }
 
+    public ControlChannel getNegotiationChannel() {
+        return negotiationChannel;
+    }
+
     public int getSessionId() {
         return sessionId;
     }
@@ -102,6 +120,7 @@ public final class TcpDesktopConnection implements Closeable {
         shutdownSocket(videoSocket);
         shutdownSocket(audioSocket);
         shutdownSocket(controlSocket);
+        shutdownSocket(negotiationSocket);
     }
 
     @Override
@@ -109,8 +128,10 @@ public final class TcpDesktopConnection implements Closeable {
         closeQuietly(videoSocket);
         closeQuietly(audioSocket);
         closeQuietly(controlSocket);
+        closeQuietly(negotiationSocket);
         videoSocket = null;
         audioSocket = null;
+        controlSocket = null;
     }
 
     private static void shutdownSocket(Socket socket) {
@@ -143,16 +164,10 @@ public final class TcpDesktopConnection implements Closeable {
         int len = StringUtils.getUtf8TruncationIndex(deviceNameBytes, DEVICE_NAME_FIELD_LENGTH - 1);
         System.arraycopy(deviceNameBytes, 0, buffer, 0, len);
 
-        // Always send deviceMeta on the control socket. The previous
-        // getFirstSocket() could route the 64-byte device name to the video
-        // socket if it was bound before sendDeviceMeta ran (race between the
-        // accept thread binding the video socket and the session thread calling
-        // sendDeviceMeta at the top of run()). That would corrupt the video
-        // stream with 64 bytes of device name prepended before frame headers.
-        if (controlSocket == null) {
-            throw new IOException("No control socket available to send device metadata");
+        if (negotiationSocket == null) {
+            throw new IOException("No negotiation socket available to send device metadata");
         }
-        FileDescriptor fd = getFileDescriptor(controlSocket);
+        FileDescriptor fd = getFileDescriptor(negotiationSocket);
         if (fd == null) {
             throw new IOException("Could not get file descriptor for device metadata transmission");
         }
@@ -187,7 +202,7 @@ public final class TcpDesktopConnection implements Closeable {
         if (role < 0) {
             throw new IOException("Connection closed before role byte received");
         }
-        if (role != ROLE_VIDEO && role != ROLE_AUDIO && role != ROLE_CONTROL) {
+        if (role != ROLE_VIDEO && role != ROLE_AUDIO && role != ROLE_CONTROL && role != ROLE_NEGOTIATION) {
             throw new IOException("Invalid socket role: " + role);
         }
         return role;

@@ -94,6 +94,9 @@ public final class DaemonServer {
                 }
 
                 switch (role) {
+                    case TcpDesktopConnection.ROLE_NEGOTIATION:
+                        handleNegotiationSocket(socket);
+                        break;
                     case TcpDesktopConnection.ROLE_CONTROL:
                         handleControlSocket(socket);
                         break;
@@ -116,7 +119,7 @@ public final class DaemonServer {
         Ln.i("DaemonServer accept loop exited");
     }
 
-    private void handleControlSocket(Socket socket) {
+    private void handleNegotiationSocket(Socket socket) {
         // Atomically reserve a session id in [1, Integer.MAX_VALUE]; wrap to 1
         // on overflow. getAndUpdate is atomic, unlike the previous
         // getAndIncrement + non-atomic reset-to-1 which could let two
@@ -128,7 +131,7 @@ public final class DaemonServer {
         } catch (IOException e) {
             Ln.w("Failed to write sessionId: " + e.getMessage());
             try { socket.close(); } catch (IOException closeEx) {
-                Ln.d("Failed to close control socket after sessionId write failure: " + closeEx.getMessage());
+                Ln.d("Failed to close negotiation socket after sessionId write failure: " + closeEx.getMessage());
             }
             return;
         }
@@ -139,13 +142,13 @@ public final class DaemonServer {
         } catch (IOException e) {
             Ln.w("Failed to create client session: " + e.getMessage());
             try { socket.close(); } catch (IOException closeEx) {
-                Ln.d("Failed to close control socket after session creation failure: " + closeEx.getMessage());
+                Ln.d("Failed to close negotiation socket after session creation failure: " + closeEx.getMessage());
             }
             return;
         }
 
         sessions.put(sessionId, session);
-        Ln.i("DaemonServer: new control session " + sessionId + " from " + socket.getRemoteSocketAddress());
+        Ln.i("DaemonServer: new negotiation session " + sessionId + " from " + socket.getRemoteSocketAddress());
 
         try {
             clientExecutor.submit(session);
@@ -156,6 +159,24 @@ public final class DaemonServer {
             Ln.w("DaemonServer: rejected session " + sessionId + " (executor shut down?), cleaning up");
             sessions.remove(sessionId);
             session.shutdown();
+        }
+    }
+
+    private void handleControlSocket(Socket socket) {
+        try {
+            int sessionId = TcpDesktopConnection.readSessionId(socket);
+            ClientSession session = sessions.get(sessionId);
+            if (session == null) {
+                Ln.w("Control socket for unknown session " + sessionId);
+                socket.close();
+                return;
+            }
+            session.onControlSocket(socket);
+        } catch (IOException e) {
+            Ln.w("Failed to handle control socket: " + e.getMessage());
+            try { socket.close(); } catch (IOException closeEx) {
+                Ln.d("Failed to close control socket after handling error: " + closeEx.getMessage());
+            }
         }
     }
 

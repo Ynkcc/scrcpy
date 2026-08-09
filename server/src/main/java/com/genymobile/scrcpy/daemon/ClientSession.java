@@ -2,6 +2,9 @@ package com.genymobile.scrcpy.daemon;
 
 import com.genymobile.scrcpy.Options;
 import com.genymobile.scrcpy.control.Controller;
+import com.genymobile.scrcpy.control.ControlMessage;
+import com.genymobile.scrcpy.control.ControlMessageReader;
+import com.genymobile.scrcpy.control.DeviceMessageSender;
 import com.genymobile.scrcpy.daemon.control.DaemonCommandHandler;
 import com.genymobile.scrcpy.daemon.display.VirtualDisplayRegistry;
 import com.genymobile.scrcpy.daemon.display.DisplaySurfaceBroker;
@@ -16,12 +19,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
 /**
  * Per-client session orchestrator.
  *
- * <p>Formerly a god-object (306 lines) that also owned the video pipeline and control loop
- * internals. After the refactor it only coordinates lifecycle: it wires together the
- * {@link Controller}, {@link DaemonCommandHandler} and {@link SessionVideoController}, runs
- * the control loop via {@link ControlLoopRunner}, and performs ordered cleanup. Video
- * capture/encode ownership lives in {@link SessionVideoController}; upstream {@code video/}
- * construction is isolated in {@link DaemonVideoPipeline}.
+ * <p>Negotiation (ROLE_NEGOTIATION) is processed directly on the session thread.
+ * When the client receives success from negotiation, it establishes ROLE_CONTROL
+ * and ROLE_VIDEO, which are dynamically bound to this session via callbacks.
  */
 public final class ClientSession implements Runnable {
 
@@ -37,18 +37,16 @@ public final class ClientSession implements Runnable {
     private final AtomicBoolean exited = new AtomicBoolean(false);
 
     private Controller controller;
-    private DaemonCommandHandler daemonCommandHandler;
-    // Written in run() (clientExecutor thread), read in onVideoSocket()
-    // (daemon-accept thread). Volatile so onVideoSocket observes the wired
-    // reference instead of a stale null.
+    private DaemonCommandHandler scrcpyCommandHandler;
+    private DaemonCommandHandler negotiationCommandHandler;
     private volatile SessionVideoController videoController;
     private ControlLoopRunner controlLoopRunner;
 
-    public ClientSession(Socket controlSocket, int sessionId, Options options, String[] baseArgs,
+    public ClientSession(Socket negotiationSocket, int sessionId, Options options, String[] baseArgs,
                          VirtualDisplayRegistry registry, DisplaySurfaceBroker surfaceBroker,
                          DaemonExitCoordinator exitCoordinator, DaemonServer server) throws IOException {
         this.sessionId = sessionId;
-        this.connection = new TcpDesktopConnection(controlSocket, sessionId);
+        this.connection = new TcpDesktopConnection(negotiationSocket, sessionId);
         this.options = options;
         this.baseArgs = baseArgs;
         this.registry = registry;
@@ -59,24 +57,17 @@ public final class ClientSession implements Runnable {
 
     @Override
     public void run() {
-        Ln.i("Session[" + sessionId + "]: starting");
+        Ln.i("Session[" + sessionId + "]: starting negotiation loop");
         String deviceName = Device.getDeviceName();
         try {
             connection.sendDeviceMeta(deviceName);
-            Ln.i("Session[" + sessionId + "]: device meta sent");
+            Ln.i("Session[" + sessionId + "]: device meta sent via negotiation channel");
         } catch (IOException e) {
             Ln.w("Session[" + sessionId + "]: failed to send device meta: " + e.getMessage());
         }
 
+        DeviceMessageSender negotiationSender = null;
         try {
-            Options sessionOptions = options;
-            controller = new Controller(connection.getControlChannel(), null, sessionOptions);
-            Ln.i("Session[" + sessionId + "]: Controller created, displayId=" + sessionOptions.getDisplayId());
-
-            // Video lifecycle owner. Wired with the session-exit flag as a BooleanSupplier so it
-            // can guard startVideoStream without owning session state. A thin adapter over the
-            // TcpDesktopConnection exposes only the video-fd surface the controller needs, so
-            // net/TcpDesktopConnection stays untouched.
             videoController = new SessionVideoController(
                     sessionId,
                     new SessionVideoController.TcpVideoBinding() {
@@ -95,24 +86,45 @@ public final class ClientSession implements Runnable {
                             connection.bindVideoSocket(socket);
                         }
                     },
-                    sessionOptions, baseArgs, surfaceBroker, exited::get);
-            videoController.setController(controller);
+                    options, baseArgs, surfaceBroker, exited::get);
 
-            daemonCommandHandler = new DaemonCommandHandler(controller, registry, exitCoordinator, videoController);
-            controller.setControlMessageExtension(daemonCommandHandler);
-            Ln.i("Session[" + sessionId + "]: DaemonCommandHandler extension injected");
+            negotiationSender = new DeviceMessageSender(connection.getNegotiationChannel());
+            negotiationSender.start();
 
-            controlLoopRunner = new ControlLoopRunner(sessionId);
-            controlLoopRunner.start(controller, fatalError -> {
-                Ln.i("Session[" + sessionId + "]: controller terminated, fatal=" + fatalError);
-                controller.stop();
-            });
-            controlLoopRunner.join();
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
+            negotiationCommandHandler = new DaemonCommandHandler(
+                    negotiationSender,
+                    null,
+                    registry,
+                    exitCoordinator,
+                    videoController
+            );
+
+            while (!exited.get() && !Thread.currentThread().isInterrupted()) {
+                ControlMessage msg = connection.getNegotiationChannel().recv();
+                if (msg == null) {
+                    break;
+                }
+                boolean handled = negotiationCommandHandler.handle(msg);
+                if (!handled) {
+                    Ln.w("Session[" + sessionId + "]: unhandled message type in negotiation: " + msg.getType());
+                }
+            }
         } catch (Throwable t) {
-            Ln.e("Session[" + sessionId + "]: error", t);
+            if (!exited.get()) {
+                Ln.e("Session[" + sessionId + "]: error in negotiation loop", t);
+            }
         } finally {
+            if (negotiationSender != null) {
+                negotiationSender.stop();
+                try {
+                    negotiationSender.join();
+                } catch (InterruptedException ignored) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+            if (negotiationCommandHandler != null) {
+                negotiationCommandHandler.close();
+            }
             cleanup();
             Ln.i("Session[" + sessionId + "]: closed");
             if (exitCoordinator.isExitRequested()) {
@@ -121,30 +133,42 @@ public final class ClientSession implements Runnable {
         }
     }
 
-    public void onVideoSocket(Socket socket) {
-        // The client opens the video socket immediately after reading deviceMeta
-        // (sent at the top of run()). videoController is only assigned later in
-        // run(), after the (heavy) Controller construction — so the socket
-        // routinely arrives before videoController exists. Previously this branch
-        // silently closed the socket, which made ensureVideoFdReady time out
-        // (connection.hasVideo() stayed false and videoSocketLatch never counted
-        // down).
-        //
-        // Bind directly to the connection (final, created in the ctor, always
-        // non-null). When startVideoStream later runs, connection.hasVideo()
-        // returns true and ensureVideoFdReady returns without awaiting the latch.
-        // If videoController is already wired (startVideoStream already waiting),
-        // let it bind + release the latch.
-        SessionVideoController vc = this.videoController;
-        if (vc != null) {
-            vc.bindVideoSocket(socket);
+    public void onControlSocket(Socket socket) {
+        if (exited.get()) {
+            try { socket.close(); } catch (IOException ignored) {}
             return;
         }
         try {
-            connection.bindVideoSocket(socket);
-            Ln.i("Session[" + sessionId + "]: video socket bound early (videoController not yet created)");
-        } catch (IOException e) {
-            Ln.e("Session[" + sessionId + "]: failed to bind early video socket", e);
+            connection.bindControlSocket(socket);
+            Ln.i("Session[" + sessionId + "]: control socket bound, launching scrcpy controller");
+
+            controller = new Controller(connection.getControlChannel(), null, options);
+            scrcpyCommandHandler = new DaemonCommandHandler(controller, registry, exitCoordinator, videoController);
+            controller.setControlMessageExtension(scrcpyCommandHandler);
+
+            if (videoController != null) {
+                videoController.setController(controller);
+            }
+
+            controlLoopRunner = new ControlLoopRunner(sessionId);
+            controlLoopRunner.start(controller, fatalError -> {
+                Ln.i("Session[" + sessionId + "]: scrcpy controller terminated, fatal=" + fatalError);
+                controller.stop();
+            });
+        } catch (Throwable t) {
+            Ln.e("Session[" + sessionId + "]: failed to initialize scrcpy controller", t);
+            try { socket.close(); } catch (IOException ignored) {}
+        }
+    }
+
+    public void onVideoSocket(Socket socket) {
+        SessionVideoController vc = this.videoController;
+        if (vc != null) {
+            vc.bindVideoSocket(socket);
+        } else {
+            try {
+                socket.close();
+            } catch (IOException ignored) {}
         }
     }
 
@@ -180,8 +204,16 @@ public final class ClientSession implements Runnable {
                 }
             }
 
-            if (daemonCommandHandler != null) {
-                daemonCommandHandler.close();
+            if (scrcpyCommandHandler != null) {
+                scrcpyCommandHandler.close();
+            }
+
+            if (controlLoopRunner != null) {
+                try {
+                    controlLoopRunner.join();
+                } catch (InterruptedException ignored) {
+                    Thread.currentThread().interrupt();
+                }
             }
 
             connection.shutdown();

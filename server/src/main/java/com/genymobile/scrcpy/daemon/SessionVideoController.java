@@ -49,15 +49,8 @@ public final class SessionVideoController implements VideoController {
     private final AtomicBoolean videoStarted = new AtomicBoolean(false);
     private Thread videoThread;
 
-    // Replaces the previous CountDownLatch(1). Once a video socket is bound
-    // (initial or reconnection), the flag stays true for the lifetime of the
-    // session. ensureVideoFdReady uses this flag + wait/notify to block until
-    // the first video socket arrives. Subsequent startVideoStream calls use
-    // the fast path (the socket is already bound). The client-side 50ms delay
-    // after reconnectVideoSocket() ensures the accept loop has bound the new
-    // socket before 209 arrives, so the fast path always sees the latest FD.
-    private final Object videoSocketLock = new Object();
-    private volatile boolean videoSocketReady = false;
+    private int requestedDisplayId = -1;
+    private volatile boolean videoStreamRequested = false;
 
     /**
      * Abstracts the video-socket-bearing connection so this class does not depend on the full
@@ -80,13 +73,6 @@ public final class SessionVideoController implements VideoController {
         this.baseArgs = baseArgs;
         this.surfaceBroker = surfaceBroker;
         this.isSessionExited = isSessionExited;
-
-        // If the video socket was bound early (before this controller was created,
-        // via ClientSession.onVideoSocket → connection.bindVideoSocket), mark it as
-        // ready so ensureVideoFdReady's fast path works without waiting.
-        if (videoBinding.hasVideo() && videoBinding.getVideoFd() != null) {
-            videoSocketReady = true;
-        }
     }
 
     /** Late-wire the controller once the session has constructed it. */
@@ -101,93 +87,73 @@ public final class SessionVideoController implements VideoController {
             return false;
         }
 
-        // Wait for the video socket OUTSIDE the session lock. The previous
-        // implementation polled connection.hasVideo() while holding `this`,
-        // which blocked a concurrent stop/shutdown for up to 10s.
-        try {
-            ensureVideoFdReady();
-        } catch (IOException e) {
-            Ln.e("Session[" + sessionId + "]: video socket not ready for displayId=" + displayId, e);
-            return false;
-        }
-
         synchronized (this) {
-            if (isSessionExited.getAsBoolean()) {
-                Ln.w("Session[" + sessionId + "]: session exited while waiting for video socket");
-                return false;
+            Ln.i("Session[" + sessionId + "]: startVideoStream requested for displayId=" + displayId);
+            requestedDisplayId = displayId;
+            videoStreamRequested = true;
+
+            // If the video socket was bound early (e.g. on reconnection), start immediately.
+            if (videoBinding.hasVideo() && videoBinding.getVideoFd() != null) {
+                return startVideoStreamInternal();
             }
-            if (videoStarted.get()) {
-                Ln.w("Session[" + sessionId + "]: video already started for display " + displayId);
-                return false;
-            }
-
-            Ln.i("Session[" + sessionId + "]: start video stream for displayId=" + displayId);
-
-            try {
-                DaemonVideoPipeline.Built built = DaemonVideoPipeline.build(
-                        baseArgs, displayId, options, videoBinding.getVideoFd(), surfaceBroker, controller);
-                surfaceCapture = built.getSurfaceCapture();
-                surfaceEncoder = built.getSurfaceEncoder();
-                videoStreamer = built.getStreamer();
-
-                videoStarted.set(true);
-
-                videoThread = new Thread(() -> {
-                    try {
-                        surfaceEncoder.start(fatalError -> {
-                            Ln.i("Session[" + sessionId + "]: video encoder terminated, fatal=" + fatalError);
-                            videoStarted.set(false);
-                        });
-                        surfaceEncoder.join();
-                    } catch (InterruptedException e) {
-                        Thread.currentThread().interrupt();
-                    }
-                }, "video-" + sessionId + "-" + displayId);
-                videoThread.setDaemon(true);
-                videoThread.start();
-
-                Ln.i("Session[" + sessionId + "]: video stream started for display " + displayId);
-                return true;
-            } catch (Exception e) {
-                Ln.e("Session[" + sessionId + "]: failed to start video stream", e);
-                videoStarted.set(false);
-                stopVideoInternal();
-                return false;
-            }
+            return true;
         }
     }
 
-    private void ensureVideoFdReady() throws IOException {
-        // Fast path: video socket is ready and has a valid FD
-        if (videoSocketReady && videoBinding.hasVideo() && videoBinding.getVideoFd() != null) {
-            return;
+    private synchronized boolean startVideoStreamInternal() {
+        if (isSessionExited.getAsBoolean()) {
+            return false;
+        }
+        if (!videoStreamRequested) {
+            return false;
+        }
+        if (videoStarted.get()) {
+            Ln.w("Session[" + sessionId + "]: video already started for display " + requestedDisplayId);
+            return true;
+        }
+        if (!videoBinding.hasVideo() || videoBinding.getVideoFd() == null) {
+            Ln.w("Session[" + sessionId + "]: startVideoStreamInternal failed: no video socket available");
+            return false;
         }
 
-        Ln.i("Session[" + sessionId + "]: waiting for video socket...");
-        synchronized (videoSocketLock) {
-            long deadline = System.currentTimeMillis() + 10_000;
-            while (!videoSocketReady || !videoBinding.hasVideo() || videoBinding.getVideoFd() == null) {
-                if (isSessionExited.getAsBoolean()) {
-                    throw new IOException("Session exiting while waiting for video socket");
-                }
-                long remaining = deadline - System.currentTimeMillis();
-                if (remaining <= 0) {
-                    throw new IOException("Video socket not connected within timeout");
-                }
+        Ln.i("Session[" + sessionId + "]: launching video stream for displayId=" + requestedDisplayId);
+
+        try {
+            DaemonVideoPipeline.Built built = DaemonVideoPipeline.build(
+                    baseArgs, requestedDisplayId, options, videoBinding.getVideoFd(), surfaceBroker, controller);
+            surfaceCapture = built.getSurfaceCapture();
+            surfaceEncoder = built.getSurfaceEncoder();
+            videoStreamer = built.getStreamer();
+
+            videoStarted.set(true);
+
+            videoThread = new Thread(() -> {
                 try {
-                    videoSocketLock.wait(remaining);
+                    surfaceEncoder.start(fatalError -> {
+                        Ln.i("Session[" + sessionId + "]: video encoder terminated, fatal=" + fatalError);
+                        videoStarted.set(false);
+                    });
+                    surfaceEncoder.join();
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
-                    throw new IOException("Interrupted while waiting for video socket");
                 }
-            }
+            }, "video-" + sessionId + "-" + requestedDisplayId);
+            videoThread.setDaemon(true);
+            videoThread.start();
+
+            Ln.i("Session[" + sessionId + "]: video stream started for display " + requestedDisplayId);
+            return true;
+        } catch (Exception e) {
+            Ln.e("Session[" + sessionId + "]: failed to start video stream", e);
+            videoStarted.set(false);
+            stopVideoInternal();
+            return false;
         }
-        Ln.i("Session[" + sessionId + "]: video socket ready");
     }
 
     @Override
     public synchronized boolean stopVideoStream() {
-        if (!videoStarted.get()) {
+        if (!videoStarted.get() && !videoStreamRequested) {
             Ln.w("Session[" + sessionId + "]: video not started");
             return false;
         }
@@ -199,15 +165,13 @@ public final class SessionVideoController implements VideoController {
     // callers (stopVideoStream, cleanup, failed startVideoStream) serialize
     // instead of double-releasing surfaceEncoder/surfaceCapture/videoThread.
     public synchronized void stopVideoInternal() {
+        videoStreamRequested = false;
         videoStarted.set(false);
         if (surfaceEncoder != null) {
             surfaceEncoder.stop();
         }
         // Join the video thread to ensure the old encoder's termination callback
         // has fully completed before allowing a new video stream to start.
-        // Without this, a start→stop→start sequence can race: the old callback
-        // resets videoStarted=false after the new stream already set it true,
-        // causing the subsequent stop to wrongly report "not started".
         if (videoThread != null) {
             try {
                 videoThread.join(2000);
@@ -232,14 +196,18 @@ public final class SessionVideoController implements VideoController {
 
     /** Called from the accept loop when a video socket arrives for this session. */
     public void bindVideoSocket(Socket socket) {
-        try {
-            videoBinding.bindVideoSocket(socket);
-            synchronized (videoSocketLock) {
-                videoSocketReady = true;
-                videoSocketLock.notifyAll();
+        synchronized (this) {
+            try {
+                videoBinding.bindVideoSocket(socket);
+                if (videoStreamRequested) {
+                    Ln.i("Session[" + sessionId + "]: video socket bound, triggering startVideoStreamInternal");
+                    startVideoStreamInternal();
+                } else {
+                    Ln.i("Session[" + sessionId + "]: video socket bound but video stream not requested yet");
+                }
+            } catch (IOException e) {
+                Ln.e("Session[" + sessionId + "]: failed to bind video socket", e);
             }
-        } catch (IOException e) {
-            Ln.e("Session[" + sessionId + "]: failed to bind video socket", e);
         }
     }
 }
