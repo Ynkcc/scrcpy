@@ -5,8 +5,6 @@ import com.genymobile.scrcpy.control.ControlMessageExtension;
 import com.genymobile.scrcpy.control.Controller;
 import com.genymobile.scrcpy.control.DeviceMessage;
 import com.genymobile.scrcpy.control.DeviceMessageSender;
-import com.genymobile.scrcpy.control.DaemonDeviceMessages;
-import com.genymobile.scrcpy.control.DaemonControlMessages;
 import com.genymobile.scrcpy.device.Device;
 import com.genymobile.scrcpy.daemon.display.VirtualDisplayRegistry;
 import com.genymobile.scrcpy.daemon.display.DisplaySurfaceBroker;

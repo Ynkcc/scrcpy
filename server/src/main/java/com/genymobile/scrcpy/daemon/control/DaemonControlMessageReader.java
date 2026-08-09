@@ -1,4 +1,6 @@
-package com.genymobile.scrcpy.control;
+package com.genymobile.scrcpy.daemon.control;
+
+import com.genymobile.scrcpy.control.ControlMessage;
 
 import java.io.DataInputStream;
 import java.io.IOException;

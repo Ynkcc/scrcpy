@@ -6,17 +6,17 @@ public final class DeviceMessage {
     public static final int TYPE_ACK_CLIPBOARD = 1;
     public static final int TYPE_UHID_OUTPUT = 2;
 
-    int type;
-    String text;
-    long sequence;
+    public int type;
+    public String text;
+    public long sequence;
     private int id;
     private byte[] data;
 
-    int statusCode;
-    int displayId;
-    int[] displayIds;
+    public int statusCode;
+    public int displayId;
+    public int[] displayIds;
 
-    DeviceMessage() {
+    public DeviceMessage() {
     }
 
     public static DeviceMessage createClipboard(String text) {

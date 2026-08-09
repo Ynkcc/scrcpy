@@ -1,5 +1,6 @@
 package com.genymobile.scrcpy.control;
 
+import com.genymobile.scrcpy.daemon.control.DaemonDeviceMessageWriter;
 import com.genymobile.scrcpy.util.StringUtils;
 
 import java.io.BufferedOutputStream;

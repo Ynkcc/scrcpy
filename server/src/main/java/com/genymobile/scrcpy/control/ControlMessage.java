@@ -38,7 +38,7 @@ public final class ControlMessage {
     public static final int COPY_KEY_CUT = 2;
 
     private int type;
-    String text;
+    public String text;
     private int metaState; // KeyEvent.META_*
     private int action; // KeyEvent.ACTION_* or MotionEvent.ACTION_*
     private int keycode; // KeyEvent.KEYCODE_*
@@ -52,19 +52,19 @@ public final class ControlMessage {
     private int copyKey;
     private boolean paste;
     private int repeat;
-    long sequence;
+    public long sequence;
     private int id;
-    byte[] data;
+    public byte[] data;
     private boolean on;
     private int vendorId;
     private int productId;
-    int width;
-    int height;
+    public int width;
+    public int height;
 
-    int displayId;
-    int dpi;
-    int flags;
-    boolean isKeyEvent;
+    public int displayId;
+    public int dpi;
+    public int flags;
+    public boolean isKeyEvent;
 
     private ControlMessage() {
     }
