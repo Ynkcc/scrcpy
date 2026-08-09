@@ -23,7 +23,6 @@ import android.view.KeyEvent;
 import android.view.MotionEvent;
 
 import java.io.IOException;
-import java.lang.reflect.Field;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
@@ -41,23 +40,6 @@ public final class DaemonCommandHandler implements ControlMessageExtension {
         }
     }
 
-    private static Field surfaceCaptureField;
-    private static Field senderField;
-    static {
-        try {
-            surfaceCaptureField = Controller.class.getDeclaredField("surfaceCapture");
-            surfaceCaptureField.setAccessible(true);
-        } catch (Exception e) {
-            Ln.e("DaemonCommandHandler: Failed to make Controller.surfaceCapture field accessible", e);
-        }
-        try {
-            senderField = Controller.class.getDeclaredField("sender");
-            senderField.setAccessible(true);
-        } catch (Exception e) {
-            Ln.e("DaemonCommandHandler: Failed to make Controller.sender field accessible", e);
-        }
-    }
-
     private final DeviceMessageSender sender;
     private final Controller controller;
     private final CommandContext context;
@@ -69,22 +51,14 @@ public final class DaemonCommandHandler implements ControlMessageExtension {
     private final ExecutorService lifecycleExecutor = Executors.newFixedThreadPool(2);
     private final Map<Integer, HandlerEntry> registryMap = new HashMap<>();
 
-    public DaemonCommandHandler(Controller controller, 
+    public DaemonCommandHandler(Controller controller,
                                 VirtualDisplayRegistry registry, DaemonExitCoordinator exitCoordinator,
                                 VideoController videoController) {
         this.controller = controller;
-        DeviceMessageSender s = null;
-        if (senderField != null) {
-            try {
-                s = (DeviceMessageSender) senderField.get(controller);
-            } catch (Exception e) {
-                Ln.e("DaemonCommandHandler: Failed to reflectively get Controller.sender", e);
-            }
-        }
-        this.sender = s;
+        this.sender = controller.getDeviceMessageSender();
         this.registry = registry;
         this.exitCoordinator = exitCoordinator;
-        this.context = new CommandContext(s, controller, videoController);
+        this.context = new CommandContext(sender, controller, videoController);
         initRegistry();
     }
 
@@ -188,14 +162,10 @@ public final class DaemonCommandHandler implements ControlMessageExtension {
                 throw new RuntimeException("Display not found: " + displayId);
             }
 
-            if (ctx.getController() != null && surfaceCaptureField != null) {
-                try {
-                    SurfaceCapture sc = (SurfaceCapture) surfaceCaptureField.get(ctx.getController());
-                    if (sc instanceof ScreenCapture) {
-                        ((ScreenCapture) sc).setDisplayId(displayId);
-                    }
-                } catch (Exception e) {
-                    Ln.e("DaemonCommandHandler: Failed to reflectively access Controller.surfaceCapture", e);
+            if (ctx.getController() != null) {
+                SurfaceCapture sc = ctx.getController().getSurfaceCapture();
+                if (sc instanceof ScreenCapture) {
+                    ((ScreenCapture) sc).setDisplayId(displayId);
                 }
             }
             sendSuccessResponse(msg, displayId, "OK");
@@ -220,6 +190,10 @@ public final class DaemonCommandHandler implements ControlMessageExtension {
                 throw new RuntimeException("Video controller not available");
             }
             int displayId = msg.getDisplayId();
+            boolean isValid = displayId == 0 || registry.hasDisplay(displayId);
+            if (!isValid) {
+                throw new RuntimeException("Display not found: " + displayId);
+            }
             boolean ok = ctx.getVideoController().startVideoStream(displayId);
             if (!ok) {
                 throw new RuntimeException("FAILED");

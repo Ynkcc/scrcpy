@@ -39,10 +39,10 @@ public class ScreenCapture extends SurfaceCapture {
 
     private boolean isDaemonManaged;
 
-    private static ExternalDisplayProvider externalDisplayProvider;
+    private ExternalDisplayProvider externalDisplayProvider;
 
-    public static void setExternalDisplayProvider(ExternalDisplayProvider provider) {
-        externalDisplayProvider = provider;
+    public void setExternalDisplayProvider(ExternalDisplayProvider provider) {
+        this.externalDisplayProvider = provider;
     }
 
     public void setDisplayId(int displayId) {

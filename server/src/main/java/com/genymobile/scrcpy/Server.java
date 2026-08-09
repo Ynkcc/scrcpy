@@ -9,6 +9,10 @@ import com.genymobile.scrcpy.audio.AudioRawRecorder;
 import com.genymobile.scrcpy.audio.AudioSource;
 import com.genymobile.scrcpy.control.ControlChannel;
 import com.genymobile.scrcpy.control.Controller;
+import com.genymobile.scrcpy.daemon.DaemonArgs;
+import com.genymobile.scrcpy.daemon.DaemonOptions;
+import com.genymobile.scrcpy.daemon.DaemonServer;
+import com.genymobile.scrcpy.daemon.net.TcpServerSocketListener;
 import com.genymobile.scrcpy.device.DesktopConnection;
 import com.genymobile.scrcpy.device.Device;
 import com.genymobile.scrcpy.device.Streamer;
@@ -237,14 +241,9 @@ public final class Server {
 
         prepareMainLooper();
 
-        com.genymobile.scrcpy.daemon.DaemonOptions daemonOptions = com.genymobile.scrcpy.daemon.DaemonOptions.parse(args);
-        Options options;
-        if (daemonOptions.isDaemonMode()) {
-            String[] scrubbed = com.genymobile.scrcpy.daemon.DaemonArgs.strip(args);
-            options = Options.parse(scrubbed);
-        } else {
-            options = Options.parse(args);
-        }
+        DaemonOptions daemonOptions = DaemonOptions.parse(args);
+        String[] scrubbed = daemonOptions.isDaemonMode() ? DaemonArgs.strip(args) : null;
+        Options options = Options.parse(scrubbed != null ? scrubbed : args);
 
         Ln.disableSystemStreams();
         Ln.initLogLevel(options.getLogLevel());
@@ -253,17 +252,16 @@ public final class Server {
 
         if (daemonOptions.isDaemonMode()) {
             try {
-                com.genymobile.scrcpy.daemon.net.TcpServerSocketListener.initServerSocket(options.getScid(), daemonOptions.getPort(), daemonOptions.getBindAddress());
-            } catch (java.io.IOException e) {
+                TcpServerSocketListener.initServerSocket(options.getScid(), daemonOptions.getPort(), daemonOptions.getBindAddress());
+            } catch (IOException e) {
                 Ln.e("Failed to initialize daemon server socket", e);
                 throw e;
             }
             try {
-                String[] scrubbed = com.genymobile.scrcpy.daemon.DaemonArgs.strip(args);
-                com.genymobile.scrcpy.daemon.DaemonServer daemonServer = new com.genymobile.scrcpy.daemon.DaemonServer(options, daemonOptions, scrubbed);
+                DaemonServer daemonServer = new DaemonServer(options, daemonOptions, scrubbed);
                 daemonServer.run();
             } finally {
-                com.genymobile.scrcpy.daemon.net.TcpServerSocketListener.closeServerSocket();
+                TcpServerSocketListener.closeServerSocket();
             }
             return;
         }

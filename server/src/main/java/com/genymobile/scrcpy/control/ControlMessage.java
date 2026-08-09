@@ -52,7 +52,7 @@ public final class ControlMessage {
     private int copyKey;
     private boolean paste;
     private int repeat;
-    private long sequence;
+    long sequence;
     private int id;
     byte[] data;
     private boolean on;
@@ -61,10 +61,10 @@ public final class ControlMessage {
     int width;
     int height;
 
-    private int displayId;
-    private int dpi;
-    private int flags;
-    private boolean isKeyEvent;
+    int displayId;
+    int dpi;
+    int flags;
+    boolean isKeyEvent;
 
     private ControlMessage() {
     }
@@ -292,39 +292,19 @@ public final class ControlMessage {
         return height;
     }
 
-    public void setDisplayId(int displayId) {
-        this.displayId = displayId;
-    }
-
     public int getDisplayId() {
         return displayId;
-    }
-
-    public void setDpi(int dpi) {
-        this.dpi = dpi;
     }
 
     public int getDpi() {
         return dpi;
     }
 
-    public void setFlags(int flags) {
-        this.flags = flags;
-    }
-
     public int getFlags() {
         return flags;
     }
 
-    public void setKeyEvent(boolean isKeyEvent) {
-        this.isKeyEvent = isKeyEvent;
-    }
-
     public boolean isKeyEvent() {
         return isKeyEvent;
-    }
-
-    public void setSequence(long sequence) {
-        this.sequence = sequence;
     }
 }

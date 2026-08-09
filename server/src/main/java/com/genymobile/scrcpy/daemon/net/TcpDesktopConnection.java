@@ -41,9 +41,11 @@ public final class TcpDesktopConnection implements Closeable {
 
     public void bindVideoSocket(Socket videoSocket) throws IOException {
         if (this.videoSocket != null) {
-            Ln.w("bindVideoSocket: video socket already bound, closing extra");
-            videoSocket.close();
-            return;
+            // A previous video socket is still registered (likely stale after the
+            // client closed it and reconnected). Replace it so the new stream can
+            // use a valid FD. This enables start→stop→reconnect→start sequences.
+            Ln.i("bindVideoSocket: replacing stale video socket for session " + sessionId);
+            closeQuietly(this.videoSocket);
         }
         this.videoSocket = videoSocket;
         this.videoFd = getFileDescriptor(videoSocket);
@@ -52,9 +54,8 @@ public final class TcpDesktopConnection implements Closeable {
 
     public void bindAudioSocket(Socket audioSocket) throws IOException {
         if (this.audioSocket != null) {
-            Ln.w("bindAudioSocket: audio socket already bound, closing extra");
-            audioSocket.close();
-            return;
+            Ln.i("bindAudioSocket: replacing stale audio socket for session " + sessionId);
+            closeQuietly(this.audioSocket);
         }
         this.audioSocket = audioSocket;
         this.audioFd = getFileDescriptor(audioSocket);

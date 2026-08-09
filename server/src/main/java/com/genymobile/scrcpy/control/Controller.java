@@ -184,6 +184,16 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
         this.surfaceCapture = surfaceCapture;
     }
 
+    // 供 daemon 模式复用 Controller 内部的 DeviceMessageSender，避免反射访问私有字段
+    public DeviceMessageSender getDeviceMessageSender() {
+        return sender;
+    }
+
+    // 供 daemon 模式在切换投屏源时获取当前 SurfaceCapture，避免反射访问私有字段
+    public SurfaceCapture getSurfaceCapture() {
+        return surfaceCapture;
+    }
+
     private UhidManager getUhidManager() {
         if (uhidManager == null) {
             int uhidDisplayId = displayId;

@@ -30,9 +30,9 @@ public final class DaemonServer {
     private final AtomicInteger nextSessionId = new AtomicInteger(1);
     private final AtomicBoolean running = new AtomicBoolean(true);
 
-    private VirtualDisplayRegistry registry;
-    private DisplaySurfaceBroker surfaceBroker;
-    private DaemonExitCoordinator exitCoordinator;
+    private final VirtualDisplayRegistry registry;
+    private final DisplaySurfaceBroker surfaceBroker;
+    private final DaemonExitCoordinator exitCoordinator;
 
     private ExecutorService acceptExecutor;
     private ExecutorService clientExecutor;
@@ -41,14 +41,13 @@ public final class DaemonServer {
         this.options = options;
         this.daemonOptions = daemonOptions;
         this.baseArgs = baseArgs;
+        this.registry = new VirtualDisplayRegistry();
+        this.surfaceBroker = new DisplaySurfaceBroker(registry);
+        this.exitCoordinator = new DaemonExitCoordinator(this);
     }
 
     public void run() throws IOException {
         Ln.i("DaemonServer starting on port " + daemonOptions.getPort() + ", bind=" + daemonOptions.getBindAddress());
-
-        registry = new VirtualDisplayRegistry();
-        surfaceBroker = new DisplaySurfaceBroker(registry);
-        exitCoordinator = new DaemonExitCoordinator(this);
 
         acceptExecutor = Executors.newSingleThreadExecutor(r -> {
             Thread t = new Thread(r, "daemon-accept");
@@ -204,13 +203,5 @@ public final class DaemonServer {
         synchronized (running) {
             running.notifyAll();
         }
-    }
-
-    public Options getOptions() {
-        return options;
-    }
-
-    public DaemonOptions getDaemonOptions() {
-        return daemonOptions;
     }
 }

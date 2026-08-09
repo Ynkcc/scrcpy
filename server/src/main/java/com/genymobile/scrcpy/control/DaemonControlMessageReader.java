@@ -22,7 +22,7 @@ public final class DaemonControlMessageReader {
             case DaemonControlMessages.TYPE_GET_ACTIVE_DISPLAY_IDS: {
                 long sequence = dis.readLong();
                 ControlMessage msg = ControlMessage.createEmpty(type);
-                msg.setSequence(sequence);
+                msg.sequence = sequence;
                 return msg;
             }
             case DaemonControlMessages.TYPE_INJECT_INPUT_EVENT_WITH_DISPLAY_ID:
@@ -32,7 +32,7 @@ public final class DaemonControlMessageReader {
             case DaemonControlMessages.TYPE_EXIT_DAEMON: {
                 long sequence = dis.readLong();
                 ControlMessage msg = ControlMessage.createEmpty(type);
-                msg.setSequence(sequence);
+                msg.sequence = sequence;
                 return msg;
             }
             case DaemonControlMessages.TYPE_START_VIDEO_STREAM: {
@@ -74,7 +74,7 @@ public final class DaemonControlMessageReader {
         int dpi = dis.readInt();
         int flags = dis.readInt();
         ControlMessage msg = DaemonControlMessages.createCreateVirtualDisplay(name, width, height, dpi, flags);
-        msg.setSequence(sequence);
+        msg.sequence = sequence;
         return msg;
     }
 
@@ -82,7 +82,7 @@ public final class DaemonControlMessageReader {
         long sequence = dis.readLong();
         int displayId = dis.readInt();
         ControlMessage msg = DaemonControlMessages.createReleaseVirtualDisplay(displayId);
-        msg.setSequence(sequence);
+        msg.sequence = sequence;
         return msg;
     }
 
@@ -93,7 +93,7 @@ public final class DaemonControlMessageReader {
         int height = dis.readInt();
         int dpi = dis.readInt();
         ControlMessage msg = DaemonControlMessages.createResizeVirtualDisplay(displayId, width, height, dpi);
-        msg.setSequence(sequence);
+        msg.sequence = sequence;
         return msg;
     }
 
@@ -102,7 +102,7 @@ public final class DaemonControlMessageReader {
         String packageName = parseString(dis);
         int displayId = dis.readInt();
         ControlMessage msg = DaemonControlMessages.createStartActivity(packageName, displayId);
-        msg.setSequence(sequence);
+        msg.sequence = sequence;
         return msg;
     }
 
@@ -112,7 +112,7 @@ public final class DaemonControlMessageReader {
         boolean isKeyEvent = dis.readByte() != 0;
         byte[] parcelBytes = parseByteArray(dis, 4);
         ControlMessage msg = DaemonControlMessages.createInjectInputEventWithDisplayId(displayId, isKeyEvent, parcelBytes);
-        msg.setSequence(sequence);
+        msg.sequence = sequence;
         return msg;
     }
 
@@ -120,7 +120,7 @@ public final class DaemonControlMessageReader {
         long sequence = dis.readLong();
         int displayId = dis.readInt();
         ControlMessage msg = DaemonControlMessages.createSwitchDisplay(displayId);
-        msg.setSequence(sequence);
+        msg.sequence = sequence;
         return msg;
     }
 }

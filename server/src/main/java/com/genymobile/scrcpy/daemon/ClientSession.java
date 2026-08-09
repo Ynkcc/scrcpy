@@ -122,11 +122,11 @@ public final class ClientSession implements VideoController, Runnable {
             videoStreamer = new Streamer(connection.getVideoFd(), options.getVideoCodec(),
                     options.getSendStreamMeta(), options.getSendFrameMeta());
 
-            ScreenCapture.setExternalDisplayProvider(surfaceBroker);
-
-            surfaceCapture = new ScreenCapture(
+            ScreenCapture screen = new ScreenCapture(
                     controller != null ? controller : (id, pm) -> {},
                     captureOptions);
+            screen.setExternalDisplayProvider(surfaceBroker);
+            surfaceCapture = screen;
             surfaceEncoder = new SurfaceEncoder(surfaceCapture, videoStreamer, captureOptions);
 
             if (controller != null) {
@@ -194,6 +194,19 @@ public final class ClientSession implements VideoController, Runnable {
         videoStarted.set(false);
         if (surfaceEncoder != null) {
             surfaceEncoder.stop();
+        }
+        // Join the video thread to ensure the old encoder's termination callback
+        // has fully completed before allowing a new video stream to start.
+        // Without this, a start→stop→start sequence can race: the old callback
+        // resets videoStarted=false after the new stream already set it true,
+        // causing the subsequent stop to wrongly report "not started".
+        if (videoThread != null) {
+            try {
+                videoThread.join(2000);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            videoThread = null;
         }
         if (surfaceCapture != null) {
             surfaceCapture.release();

@@ -11,22 +11,38 @@ public class DaemonOptions {
 
     public static DaemonOptions parse(String... args) {
         DaemonOptions opts = new DaemonOptions();
+        if (args == null) {
+            return opts;
+        }
+        // 与 scrcpy 原生参数一致，统一采用 key=value 形式：
+        //   daemon=true  daemon_port=27183  daemon_bind_address=127.0.0.1
         for (String arg : args) {
-            if ("--daemon".equals(arg)) {
-                opts.setDaemonMode(true);
-            } else if (arg.startsWith("--port=")) {
-                try {
-                    int port = Integer.parseInt(arg.substring("--port=".length()));
-                    if (port >= 1024 && port <= 65535) {
-                        opts.setPort(port);
+            int eq = arg.indexOf('=');
+            if (eq == -1) {
+                continue;
+            }
+            String key = arg.substring(0, eq);
+            String value = arg.substring(eq + 1);
+            switch (key) {
+                case "daemon":
+                    opts.daemonMode = Boolean.parseBoolean(value);
+                    break;
+                case "daemon_port":
+                    try {
+                        int port = Integer.parseInt(value);
+                        if (port >= 1024 && port <= 65535) {
+                            opts.port = port;
+                        }
+                    } catch (NumberFormatException ignored) {
                     }
-                } catch (NumberFormatException ignored) {
-                }
-            } else if (arg.startsWith("--bind_address=")) {
-                String address = arg.substring("--bind_address=".length());
-                if (!address.isEmpty()) {
-                    opts.setBindAddress(address);
-                }
+                    break;
+                case "daemon_bind_address":
+                    if (!value.isEmpty()) {
+                        opts.bindAddress = value;
+                    }
+                    break;
+                default:
+                    break;
             }
         }
         return opts;
