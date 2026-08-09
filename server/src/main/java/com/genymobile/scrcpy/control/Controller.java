@@ -186,6 +186,10 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
         return surfaceCapture;
     }
 
+    public DaemonCommandHandler getDaemonCommandHandler() {
+        return daemonCommandHandler;
+    }
+
     private UhidManager getUhidManager() {
         if (uhidManager == null) {
             int uhidDisplayId = displayId;
@@ -234,6 +238,7 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
     }
 
     private void control() throws IOException {
+        Ln.i("Controller.control() started, camera=" + camera + ", displayId=" + displayId);
         // on start, power on the device
         if (!camera && powerOn && displayId == 0 && !Device.isScreenOn(displayId)) {
             Device.pressReleaseKeycode(KeyEvent.KEYCODE_POWER, displayId, Device.INJECT_MODE_ASYNC);
@@ -250,8 +255,18 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
 
         boolean alive = true;
         while (!Thread.currentThread().isInterrupted() && alive) {
-            alive = handleEvent();
+            try {
+                alive = handleEvent();
+                if (daemonCommandHandler != null && daemonCommandHandler.isExitDaemonRequested()) {
+                    Ln.i("Exit daemon requested, breaking control loop");
+                    alive = false;
+                }
+            } catch (RuntimeException e) {
+                Ln.e("Controller.handleEvent() RuntimeException", e);
+                alive = false;
+            }
         }
+        Ln.i("Controller.control() exiting, alive=" + alive + ", interrupted=" + Thread.currentThread().isInterrupted());
     }
 
     private void startKeepActiveThread() {
@@ -288,6 +303,8 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
                 control();
             } catch (IOException e) {
                 Ln.e("Controller error", e);
+            } catch (RuntimeException e) {
+                Ln.e("Controller fatal error", e);
             } finally {
                 Ln.d("Controller stopped");
                 if (uhidManager != null) {
@@ -336,7 +353,7 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
             Ln.e("Control protocol error", e);
             return false;
         } catch (IOException e) {
-            // this is expected on close
+            Ln.i("ControlChannel.recv() IOException: " + e.getClass().getSimpleName() + ": " + e.getMessage());
             return false;
         }
 
