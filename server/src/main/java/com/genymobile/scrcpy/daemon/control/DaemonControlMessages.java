@@ -16,8 +16,7 @@ public final class DaemonControlMessages {
     public static final int TYPE_STOP_VIDEO_STREAM = 210;
 
     // Rotation control (per-display). For TYPE_FREEZE_ROTATION the requested
-    // rotation (0-3) is carried in ControlMessage.flags to avoid adding a new
-    // carrier field to the upstream ControlMessage class.
+    // rotation (0-3) is carried in DaemonControlMessage.flags.
     public static final int TYPE_GET_ROTATION = 211;
     public static final int TYPE_FREEZE_ROTATION = 212;
     public static final int TYPE_THAW_ROTATION = 213;
@@ -31,92 +30,125 @@ public final class DaemonControlMessages {
     private DaemonControlMessages() {
     }
 
-    public static ControlMessage createCreateVirtualDisplay(String name, int width, int height, int dpi, int flags) {
-        ControlMessage msg = ControlMessage.createEmpty(TYPE_CREATE_VIRTUAL_DISPLAY);
-        msg.text = name;
-        msg.width = width;
-        msg.height = height;
-        msg.dpi = dpi;
-        msg.flags = flags;
+    public static DaemonControlMessage payload(ControlMessage msg) {
+        return (DaemonControlMessage) msg.getExtensionPayload();
+    }
+
+    private static ControlMessage envelope(int type, DaemonControlMessage dto) {
+        ControlMessage msg = ControlMessage.createEmpty(type);
+        msg.setExtensionPayload(dto);
         return msg;
     }
 
-    public static ControlMessage createReleaseVirtualDisplay(int displayId) {
-        ControlMessage msg = ControlMessage.createEmpty(TYPE_RELEASE_VIRTUAL_DISPLAY);
-        msg.displayId = displayId;
-        return msg;
+    public static ControlMessage createCreateVirtualDisplay(long sequence, String name, int width, int height, int dpi, int flags) {
+        DaemonControlMessage dto = new DaemonControlMessage();
+        dto.setSequence(sequence);
+        dto.setText(name);
+        dto.setWidth(width);
+        dto.setHeight(height);
+        dto.setDpi(dpi);
+        dto.setFlags(flags);
+        return envelope(TYPE_CREATE_VIRTUAL_DISPLAY, dto);
     }
 
-    public static ControlMessage createResizeVirtualDisplay(int displayId, int width, int height, int dpi) {
-        ControlMessage msg = ControlMessage.createEmpty(TYPE_RESIZE_VIRTUAL_DISPLAY);
-        msg.displayId = displayId;
-        msg.width = width;
-        msg.height = height;
-        msg.dpi = dpi;
-        return msg;
+    public static ControlMessage createReleaseVirtualDisplay(long sequence, int displayId) {
+        DaemonControlMessage dto = new DaemonControlMessage();
+        dto.setSequence(sequence);
+        dto.setDisplayId(displayId);
+        return envelope(TYPE_RELEASE_VIRTUAL_DISPLAY, dto);
     }
 
-    public static ControlMessage createStartActivity(String packageName, int displayId) {
-        ControlMessage msg = ControlMessage.createEmpty(TYPE_START_ACTIVITY);
-        msg.text = packageName;
-        msg.displayId = displayId;
-        return msg;
+    public static ControlMessage createResizeVirtualDisplay(long sequence, int displayId, int width, int height, int dpi) {
+        DaemonControlMessage dto = new DaemonControlMessage();
+        dto.setSequence(sequence);
+        dto.setDisplayId(displayId);
+        dto.setWidth(width);
+        dto.setHeight(height);
+        dto.setDpi(dpi);
+        return envelope(TYPE_RESIZE_VIRTUAL_DISPLAY, dto);
     }
 
-    public static ControlMessage createInjectInputEventWithDisplayId(int displayId, boolean isKeyEvent, byte[] parcelBytes) {
-        ControlMessage msg = ControlMessage.createEmpty(TYPE_INJECT_INPUT_EVENT_WITH_DISPLAY_ID);
-        msg.displayId = displayId;
-        msg.isKeyEvent = isKeyEvent;
-        msg.data = parcelBytes;
-        return msg;
+    public static ControlMessage createStartActivity(long sequence, String packageName, int displayId) {
+        DaemonControlMessage dto = new DaemonControlMessage();
+        dto.setSequence(sequence);
+        dto.setText(packageName);
+        dto.setDisplayId(displayId);
+        return envelope(TYPE_START_ACTIVITY, dto);
     }
 
-    public static ControlMessage createSwitchDisplay(int displayId) {
-        ControlMessage msg = ControlMessage.createEmpty(TYPE_SWITCH_DISPLAY);
-        msg.displayId = displayId;
-        return msg;
+    public static ControlMessage createGetActiveDisplayIds(long sequence) {
+        DaemonControlMessage dto = new DaemonControlMessage();
+        dto.setSequence(sequence);
+        return envelope(TYPE_GET_ACTIVE_DISPLAY_IDS, dto);
+    }
+
+    public static ControlMessage createInjectInputEventWithDisplayId(long sequence, int displayId, boolean isKeyEvent, byte[] parcelBytes) {
+        DaemonControlMessage dto = new DaemonControlMessage();
+        dto.setSequence(sequence);
+        dto.setDisplayId(displayId);
+        dto.setKeyEvent(isKeyEvent);
+        dto.setData(parcelBytes);
+        return envelope(TYPE_INJECT_INPUT_EVENT_WITH_DISPLAY_ID, dto);
+    }
+
+    public static ControlMessage createSwitchDisplay(long sequence, int displayId) {
+        DaemonControlMessage dto = new DaemonControlMessage();
+        dto.setSequence(sequence);
+        dto.setDisplayId(displayId);
+        return envelope(TYPE_SWITCH_DISPLAY, dto);
     }
 
     public static ControlMessage createStartVideoStream(long sequence, int displayId) {
-        ControlMessage msg = ControlMessage.createEmpty(TYPE_START_VIDEO_STREAM);
-        msg.displayId = displayId;
-        msg.sequence = sequence;
-        return msg;
+        DaemonControlMessage dto = new DaemonControlMessage();
+        dto.setSequence(sequence);
+        dto.setDisplayId(displayId);
+        return envelope(TYPE_START_VIDEO_STREAM, dto);
     }
 
     public static ControlMessage createStopVideoStream(long sequence) {
-        ControlMessage msg = ControlMessage.createEmpty(TYPE_STOP_VIDEO_STREAM);
-        msg.sequence = sequence;
-        return msg;
+        DaemonControlMessage dto = new DaemonControlMessage();
+        dto.setSequence(sequence);
+        return envelope(TYPE_STOP_VIDEO_STREAM, dto);
     }
 
-    public static ControlMessage createGetRotation(int displayId) {
-        ControlMessage msg = ControlMessage.createEmpty(TYPE_GET_ROTATION);
-        msg.displayId = displayId;
-        return msg;
+    public static ControlMessage createGetRotation(long sequence, int displayId) {
+        DaemonControlMessage dto = new DaemonControlMessage();
+        dto.setSequence(sequence);
+        dto.setDisplayId(displayId);
+        return envelope(TYPE_GET_ROTATION, dto);
     }
 
-    public static ControlMessage createFreezeRotation(int displayId, int rotation) {
-        ControlMessage msg = ControlMessage.createEmpty(TYPE_FREEZE_ROTATION);
-        msg.displayId = displayId;
-        // rotation (0-3) carried in flags (see type comment).
-        msg.flags = rotation;
-        return msg;
+    public static ControlMessage createFreezeRotation(long sequence, int displayId, int rotation) {
+        DaemonControlMessage dto = new DaemonControlMessage();
+        dto.setSequence(sequence);
+        dto.setDisplayId(displayId);
+        dto.setFlags(rotation);
+        return envelope(TYPE_FREEZE_ROTATION, dto);
     }
 
-    public static ControlMessage createThawRotation(int displayId) {
-        ControlMessage msg = ControlMessage.createEmpty(TYPE_THAW_ROTATION);
-        msg.displayId = displayId;
-        return msg;
+    public static ControlMessage createThawRotation(long sequence, int displayId) {
+        DaemonControlMessage dto = new DaemonControlMessage();
+        dto.setSequence(sequence);
+        dto.setDisplayId(displayId);
+        return envelope(TYPE_THAW_ROTATION, dto);
     }
 
-    public static ControlMessage createIsRotationFrozen(int displayId) {
-        ControlMessage msg = ControlMessage.createEmpty(TYPE_IS_ROTATION_FROZEN);
-        msg.displayId = displayId;
-        return msg;
+    public static ControlMessage createIsRotationFrozen(long sequence, int displayId) {
+        DaemonControlMessage dto = new DaemonControlMessage();
+        dto.setSequence(sequence);
+        dto.setDisplayId(displayId);
+        return envelope(TYPE_IS_ROTATION_FROZEN, dto);
     }
 
-    public static ControlMessage createGetActiveDisplayInfos() {
-        return ControlMessage.createEmpty(TYPE_GET_ACTIVE_DISPLAY_INFOS);
+    public static ControlMessage createGetActiveDisplayInfos(long sequence) {
+        DaemonControlMessage dto = new DaemonControlMessage();
+        dto.setSequence(sequence);
+        return envelope(TYPE_GET_ACTIVE_DISPLAY_INFOS, dto);
+    }
+
+    public static ControlMessage createExitDaemon(long sequence) {
+        DaemonControlMessage dto = new DaemonControlMessage();
+        dto.setSequence(sequence);
+        return envelope(TYPE_EXIT_DAEMON, dto);
     }
 }

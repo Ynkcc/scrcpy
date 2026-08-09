@@ -7,7 +7,6 @@ import com.genymobile.scrcpy.control.DeviceMessage;
 import com.genymobile.scrcpy.control.DeviceMessageSender;
 import com.genymobile.scrcpy.device.Device;
 import com.genymobile.scrcpy.daemon.display.VirtualDisplayRegistry;
-import com.genymobile.scrcpy.daemon.display.DisplaySurfaceBroker;
 import com.genymobile.scrcpy.daemon.display.ActivityLauncher;
 import com.genymobile.scrcpy.daemon.display.RotationController;
 import com.genymobile.scrcpy.daemon.DaemonExitCoordinator;
@@ -32,8 +31,8 @@ import java.util.concurrent.RejectedExecutionException;
 public final class DaemonCommandHandler implements ControlMessageExtension {
 
     private static class HandlerEntry {
-        final ExecutionPolicy policy;
-        final CommandHandler handler;
+        private final ExecutionPolicy policy;
+        private final CommandHandler handler;
 
         HandlerEntry(ExecutionPolicy policy, CommandHandler handler) {
             this.policy = policy;
@@ -76,14 +75,19 @@ public final class DaemonCommandHandler implements ControlMessageExtension {
         lifecycleExecutor.shutdownNow();
     }
 
+    private static DaemonControlMessage payload(ControlMessage msg) {
+        return DaemonControlMessages.payload(msg);
+    }
+
     private void register(int type, ExecutionPolicy policy, CommandHandler handler) {
         registryMap.put(type, new HandlerEntry(policy, handler));
     }
 
     private void initRegistry() {
         register(DaemonControlMessages.TYPE_CREATE_VIRTUAL_DISPLAY, ExecutionPolicy.SLOW, (msg, ctx) -> {
+            DaemonControlMessage dto = payload(msg);
             int newDisplayId = registry.createVirtualDisplay(
-                    msg.getText(), msg.getWidth(), msg.getHeight(), msg.getDpi(), msg.getFlags());
+                    dto.getText(), dto.getWidth(), dto.getHeight(), dto.getDpi(), dto.getFlags());
             if (newDisplayId == -1) {
                 throw new RuntimeException("FAILED");
             }
@@ -91,17 +95,19 @@ public final class DaemonCommandHandler implements ControlMessageExtension {
         });
 
         register(DaemonControlMessages.TYPE_RELEASE_VIRTUAL_DISPLAY, ExecutionPolicy.SLOW, (msg, ctx) -> {
-            boolean ok = registry.releaseVirtualDisplay(msg.getDisplayId());
+            DaemonControlMessage dto = payload(msg);
+            boolean ok = registry.releaseVirtualDisplay(dto.getDisplayId());
             if (!ok) {
                 throw new RuntimeException("FAILED");
             }
-            sendSuccessResponse(msg, msg.getDisplayId(), "OK");
+            sendSuccessResponse(msg, dto.getDisplayId(), "OK");
         });
 
         register(DaemonControlMessages.TYPE_RESIZE_VIRTUAL_DISPLAY, ExecutionPolicy.SLOW, (msg, ctx) -> {
-            int displayId = msg.getDisplayId();
+            DaemonControlMessage dto = payload(msg);
+            int displayId = dto.getDisplayId();
             boolean ok = registry.resizeVirtualDisplay(
-                    displayId, msg.getWidth(), msg.getHeight(), msg.getDpi());
+                    displayId, dto.getWidth(), dto.getHeight(), dto.getDpi());
             if (!ok) {
                 throw new RuntimeException("FAILED");
             }
@@ -120,7 +126,7 @@ public final class DaemonCommandHandler implements ControlMessageExtension {
                     if (runningDisplayId == displayId && cc != null) {
                         Ln.i("DaemonCommandHandler: resize displayId=" + displayId
                                 + " — requesting encoder pipeline reset for new size "
-                                + msg.getWidth() + "x" + msg.getHeight());
+                                + dto.getWidth() + "x" + dto.getHeight());
                         cc.reset(CaptureControl.RESET_REASON_CLIENT_RESIZED
                                 | CaptureControl.RESET_REASON_DISPLAY_PROPERTIES_CHANGED);
                     }
@@ -130,38 +136,40 @@ public final class DaemonCommandHandler implements ControlMessageExtension {
         });
 
         register(DaemonControlMessages.TYPE_START_ACTIVITY, ExecutionPolicy.SLOW, (msg, ctx) -> {
-            int result = ActivityLauncher.startActivity(msg.getText(), msg.getDisplayId());
+            DaemonControlMessage dto = payload(msg);
+            int result = ActivityLauncher.startActivity(dto.getText(), dto.getDisplayId());
             if (result < 0) {
                 throw new RuntimeException("FAILED");
             }
-            sendSuccessResponse(msg, msg.getDisplayId(), "OK");
+            sendSuccessResponse(msg, dto.getDisplayId(), "OK");
         });
 
         register(DaemonControlMessages.TYPE_GET_ACTIVE_DISPLAY_IDS, ExecutionPolicy.FAST, (msg, ctx) -> {
             int[] ids = registry.getActiveDisplayIds();
             if (ctx.getSender() != null) {
-                DeviceMessage response = DaemonDeviceMessages.createActiveDisplaysResponse(msg.getSequence(), ids);
+                DeviceMessage response = DaemonDeviceMessages.createActiveDisplaysResponse(payload(msg).getSequence(), ids);
                 ctx.getSender().send(response);
             }
         });
 
         register(DaemonControlMessages.TYPE_INJECT_INPUT_EVENT_WITH_DISPLAY_ID, ExecutionPolicy.FAST, (msg, ctx) -> {
+            DaemonControlMessage dto = payload(msg);
             Parcel parcel = Parcel.obtain();
-            parcel.unmarshall(msg.getData(), 0, msg.getData().length);
+            parcel.unmarshall(dto.getData(), 0, dto.getData().length);
             parcel.setDataPosition(0);
             InputEvent event;
-            if (msg.isKeyEvent()) {
+            if (dto.isKeyEvent()) {
                 event = KeyEvent.CREATOR.createFromParcel(parcel);
             } else {
                 event = MotionEvent.CREATOR.createFromParcel(parcel);
             }
             parcel.recycle();
 
-            int targetDisplayId = msg.getDisplayId();
+            int targetDisplayId = dto.getDisplayId();
             boolean ok = Device.injectEvent(event, targetDisplayId, Device.INJECT_MODE_ASYNC);
 
             Ln.d("handleInjectInputEvent: displayId=" + targetDisplayId
-                    + ", isKey=" + msg.isKeyEvent()
+                    + ", isKey=" + dto.isKeyEvent()
                     + ", result=" + ok);
 
             if (!ok && targetDisplayId == 0 && event instanceof MotionEvent) {
@@ -187,7 +195,8 @@ public final class DaemonCommandHandler implements ControlMessageExtension {
         });
 
         register(DaemonControlMessages.TYPE_SWITCH_DISPLAY, ExecutionPolicy.FAST, (msg, ctx) -> {
-            int displayId = msg.getDisplayId();
+            DaemonControlMessage dto = payload(msg);
+            int displayId = dto.getDisplayId();
             boolean isValid = displayId == 0 || registry.hasDisplay(displayId);
             if (!isValid) {
                 throw new RuntimeException("Display not found: " + displayId);
@@ -222,7 +231,8 @@ public final class DaemonCommandHandler implements ControlMessageExtension {
             if (ctx.getVideoController() == null) {
                 throw new RuntimeException("Video controller not available");
             }
-            int displayId = msg.getDisplayId();
+            DaemonControlMessage dto = payload(msg);
+            int displayId = dto.getDisplayId();
             boolean isValid = displayId == 0 || registry.hasDisplay(displayId);
             if (!isValid) {
                 throw new RuntimeException("Display not found: " + displayId);
@@ -246,30 +256,34 @@ public final class DaemonCommandHandler implements ControlMessageExtension {
         });
 
         register(DaemonControlMessages.TYPE_GET_ROTATION, ExecutionPolicy.FAST, (msg, ctx) -> {
-            int rotation = rotationController.getRotation(msg.getDisplayId());
-            sendSuccessResponse(msg, msg.getDisplayId(), String.valueOf(rotation));
+            DaemonControlMessage dto = payload(msg);
+            int rotation = rotationController.getRotation(dto.getDisplayId());
+            sendSuccessResponse(msg, dto.getDisplayId(), String.valueOf(rotation));
         });
 
         register(DaemonControlMessages.TYPE_FREEZE_ROTATION, ExecutionPolicy.FAST, (msg, ctx) -> {
-            // rotation (0-3) carried in msg.flags (see DaemonControlMessages).
-            rotationController.freeze(msg.getDisplayId(), msg.getFlags());
-            sendSuccessResponse(msg, msg.getDisplayId(), "OK");
+            DaemonControlMessage dto = payload(msg);
+            // rotation (0-3) carried in dto.getFlags() (see DaemonControlMessages).
+            rotationController.freeze(dto.getDisplayId(), dto.getFlags());
+            sendSuccessResponse(msg, dto.getDisplayId(), "OK");
         });
 
         register(DaemonControlMessages.TYPE_THAW_ROTATION, ExecutionPolicy.FAST, (msg, ctx) -> {
-            rotationController.thaw(msg.getDisplayId());
-            sendSuccessResponse(msg, msg.getDisplayId(), "OK");
+            DaemonControlMessage dto = payload(msg);
+            rotationController.thaw(dto.getDisplayId());
+            sendSuccessResponse(msg, dto.getDisplayId(), "OK");
         });
 
         register(DaemonControlMessages.TYPE_IS_ROTATION_FROZEN, ExecutionPolicy.FAST, (msg, ctx) -> {
-            int frozen = rotationController.isFrozen(msg.getDisplayId());
-            sendSuccessResponse(msg, msg.getDisplayId(), String.valueOf(frozen));
+            DaemonControlMessage dto = payload(msg);
+            int frozen = rotationController.isFrozen(dto.getDisplayId());
+            sendSuccessResponse(msg, dto.getDisplayId(), String.valueOf(frozen));
         });
 
         register(DaemonControlMessages.TYPE_GET_ACTIVE_DISPLAY_INFOS, ExecutionPolicy.FAST, (msg, ctx) -> {
             com.genymobile.scrcpy.display.DisplayInfo[] infos = registry.getActiveDisplayInfos();
             if (ctx.getSender() != null) {
-                DeviceMessage response = DaemonDeviceMessages.createActiveDisplayInfosResponse(msg.getSequence(), infos);
+                DeviceMessage response = DaemonDeviceMessages.createActiveDisplayInfosResponse(payload(msg).getSequence(), infos);
                 ctx.getSender().send(response);
             }
         });
@@ -313,7 +327,7 @@ public final class DaemonCommandHandler implements ControlMessageExtension {
     private void sendSuccessResponse(ControlMessage msg, int extraData, String text) {
         if (sender != null) {
             try {
-                DeviceMessage response = DaemonDeviceMessages.createGenericResponse(msg.getSequence(), 0, extraData, text);
+                DeviceMessage response = DaemonDeviceMessages.createGenericResponse(payload(msg).getSequence(), 0, extraData, text);
                 sender.send(response);
             } catch (Exception e) {
                 Ln.e("Failed to send response", e);
@@ -325,7 +339,7 @@ public final class DaemonCommandHandler implements ControlMessageExtension {
         if (sender != null) {
             try {
                 String errorMsg = t.getMessage() != null ? t.getMessage() : t.toString();
-                DeviceMessage response = DaemonDeviceMessages.createGenericResponse(msg.getSequence(), -1, -1, errorMsg);
+                DeviceMessage response = DaemonDeviceMessages.createGenericResponse(payload(msg).getSequence(), -1, -1, errorMsg);
                 sender.send(response);
             } catch (Exception e) {
                 Ln.e("Failed to send error response", e);

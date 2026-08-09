@@ -13,29 +13,36 @@ public final class DaemonDeviceMessages {
     private DaemonDeviceMessages() {
     }
 
+    public static DaemonDeviceMessage payload(DeviceMessage msg) {
+        return (DaemonDeviceMessage) msg.getExtensionPayload();
+    }
+
+    private static DeviceMessage envelope(int type, DaemonDeviceMessage dto) {
+        DeviceMessage msg = DeviceMessage.createEmpty(type);
+        msg.setExtensionPayload(dto);
+        return msg;
+    }
+
     public static DeviceMessage createGenericResponse(long sequence, int statusCode, int displayId, String responseString) {
-        DeviceMessage event = new DeviceMessage();
-        event.type = TYPE_RESPONSE_GENERIC;
-        event.sequence = sequence;
-        event.statusCode = statusCode;
-        event.displayId = displayId;
-        event.text = responseString;
-        return event;
+        DaemonDeviceMessage dto = new DaemonDeviceMessage();
+        dto.setSequence(sequence);
+        dto.setStatusCode(statusCode);
+        dto.setDisplayId(displayId);
+        dto.setText(responseString);
+        return envelope(TYPE_RESPONSE_GENERIC, dto);
     }
 
     public static DeviceMessage createActiveDisplaysResponse(long sequence, int[] displayIds) {
-        DeviceMessage event = new DeviceMessage();
-        event.type = TYPE_RESPONSE_ACTIVE_DISPLAYS;
-        event.sequence = sequence;
-        event.displayIds = displayIds;
-        return event;
+        DaemonDeviceMessage dto = new DaemonDeviceMessage();
+        dto.setSequence(sequence);
+        dto.setDisplayIds(displayIds);
+        return envelope(TYPE_RESPONSE_ACTIVE_DISPLAYS, dto);
     }
 
     public static DeviceMessage createActiveDisplayInfosResponse(long sequence, DisplayInfo[] infos) {
-        DeviceMessage event = new DeviceMessage();
-        event.type = TYPE_RESPONSE_ACTIVE_DISPLAY_INFOS;
-        event.sequence = sequence;
-        event.displayInfos = infos;
-        return event;
+        DaemonDeviceMessage dto = new DaemonDeviceMessage();
+        dto.setSequence(sequence);
+        dto.setDisplayInfos(infos);
+        return envelope(TYPE_RESPONSE_ACTIVE_DISPLAY_INFOS, dto);
     }
 }

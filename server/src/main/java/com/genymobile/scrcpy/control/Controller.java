@@ -110,10 +110,7 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
     private boolean keepDisplayPowerOff;
 
     // Used for resetting video encoding on RESET_VIDEO message or for sending camera controls
-    // Written from a worker thread (ClientSession.startVideoStream on the
-    // lifecycleExecutor) and read from the control-recv thread (resetVideo/
-    // resizeDisplay) and command-handler threads. Volatile for cross-thread
-    // visibility.
+    // Volatile: written from video lifecycle threads, read from control-recv/command threads.
     private volatile SurfaceCapture surfaceCapture;
     private volatile ControlMessageExtension extension;
 

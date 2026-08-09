@@ -38,7 +38,7 @@ public final class ControlMessage {
     public static final int COPY_KEY_CUT = 2;
 
     private int type;
-    public String text;
+    private String text;
     private int metaState; // KeyEvent.META_*
     private int action; // KeyEvent.ACTION_* or MotionEvent.ACTION_*
     private int keycode; // KeyEvent.KEYCODE_*
@@ -52,19 +52,18 @@ public final class ControlMessage {
     private int copyKey;
     private boolean paste;
     private int repeat;
-    public long sequence;
+    private long sequence;
     private int id;
-    public byte[] data;
+    private byte[] data;
     private boolean on;
     private int vendorId;
     private int productId;
-    public int width;
-    public int height;
+    private int width;
+    private int height;
 
-    public int displayId;
-    public int dpi;
-    public int flags;
-    public boolean isKeyEvent;
+    // Opaque payload attached by daemon-mode extensions. Null for upstream
+    // messages; the daemon reader/writer/handler cast it to a daemon DTO.
+    private Object extensionPayload;
 
     private ControlMessage() {
     }
@@ -292,19 +291,11 @@ public final class ControlMessage {
         return height;
     }
 
-    public int getDisplayId() {
-        return displayId;
+    public Object getExtensionPayload() {
+        return extensionPayload;
     }
 
-    public int getDpi() {
-        return dpi;
-    }
-
-    public int getFlags() {
-        return flags;
-    }
-
-    public boolean isKeyEvent() {
-        return isKeyEvent;
+    public void setExtensionPayload(Object extensionPayload) {
+        this.extensionPayload = extensionPayload;
     }
 }

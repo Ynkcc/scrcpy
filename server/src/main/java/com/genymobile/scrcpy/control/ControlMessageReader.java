@@ -17,7 +17,7 @@ public class ControlMessageReader {
     public static final int CLIPBOARD_TEXT_MAX_LENGTH = MESSAGE_MAX_SIZE - 14; // type: 1 byte; sequence: 8 bytes; paste flag: 1 byte; length: 4 bytes
     public static final int INJECT_TEXT_MAX_LENGTH = 300;
 
-    final DataInputStream dis;
+    private final DataInputStream dis;
 
     public ControlMessageReader(InputStream rawInputStream) {
         dis = new DataInputStream(new BufferedInputStream(rawInputStream));

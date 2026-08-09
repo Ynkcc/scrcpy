@@ -1,26 +1,22 @@
 package com.genymobile.scrcpy.control;
 
-import com.genymobile.scrcpy.display.DisplayInfo;
-
 public final class DeviceMessage {
 
     public static final int TYPE_CLIPBOARD = 0;
     public static final int TYPE_ACK_CLIPBOARD = 1;
     public static final int TYPE_UHID_OUTPUT = 2;
 
-    public int type;
-    public String text;
-    public long sequence;
+    private int type;
+    private String text;
+    private long sequence;
     private int id;
     private byte[] data;
 
-    public int statusCode;
-    public int displayId;
-    public int[] displayIds;
-    // Per-display metadata for TYPE_RESPONSE_ACTIVE_DISPLAY_INFOS (102).
-    public DisplayInfo[] displayInfos;
+    // Opaque payload attached by daemon-mode extensions. Null for upstream
+    // messages; the daemon writer casts it to a daemon DTO.
+    private Object extensionPayload;
 
-    public DeviceMessage() {
+    private DeviceMessage() {
     }
 
     public static DeviceMessage createClipboard(String text) {
@@ -45,6 +41,12 @@ public final class DeviceMessage {
         return event;
     }
 
+    public static DeviceMessage createEmpty(int type) {
+        DeviceMessage event = new DeviceMessage();
+        event.type = type;
+        return event;
+    }
+
     public int getType() {
         return type;
     }
@@ -65,19 +67,11 @@ public final class DeviceMessage {
         return data;
     }
 
-    public int getStatusCode() {
-        return statusCode;
+    public Object getExtensionPayload() {
+        return extensionPayload;
     }
 
-    public int getDisplayId() {
-        return displayId;
-    }
-
-    public int[] getDisplayIds() {
-        return displayIds;
-    }
-
-    public DisplayInfo[] getDisplayInfos() {
-        return displayInfos;
+    public void setExtensionPayload(Object extensionPayload) {
+        this.extensionPayload = extensionPayload;
     }
 }

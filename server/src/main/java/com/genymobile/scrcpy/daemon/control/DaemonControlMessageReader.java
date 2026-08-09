@@ -21,66 +21,28 @@ public final class DaemonControlMessageReader {
                 return parseResizeVirtualDisplay(dis);
             case DaemonControlMessages.TYPE_START_ACTIVITY:
                 return parseStartActivityWithDisplay(dis);
-            case DaemonControlMessages.TYPE_GET_ACTIVE_DISPLAY_IDS: {
-                long sequence = dis.readLong();
-                ControlMessage msg = ControlMessage.createEmpty(type);
-                msg.sequence = sequence;
-                return msg;
-            }
+            case DaemonControlMessages.TYPE_GET_ACTIVE_DISPLAY_IDS:
+                return DaemonControlMessages.createGetActiveDisplayIds(dis.readLong());
             case DaemonControlMessages.TYPE_INJECT_INPUT_EVENT_WITH_DISPLAY_ID:
                 return parseInjectInputEventWithDisplayId(dis);
             case DaemonControlMessages.TYPE_SWITCH_DISPLAY:
                 return parseSwitchDisplay(dis);
-            case DaemonControlMessages.TYPE_EXIT_DAEMON: {
-                long sequence = dis.readLong();
-                ControlMessage msg = ControlMessage.createEmpty(type);
-                msg.sequence = sequence;
-                return msg;
-            }
-            case DaemonControlMessages.TYPE_START_VIDEO_STREAM: {
-                long sequence = dis.readLong();
-                int displayId = dis.readInt();
-                return DaemonControlMessages.createStartVideoStream(sequence, displayId);
-            }
-            case DaemonControlMessages.TYPE_STOP_VIDEO_STREAM: {
-                long sequence = dis.readLong();
-                return DaemonControlMessages.createStopVideoStream(sequence);
-            }
-            case DaemonControlMessages.TYPE_GET_ROTATION: {
-                long sequence = dis.readLong();
-                int displayId = dis.readInt();
-                ControlMessage msg = DaemonControlMessages.createGetRotation(displayId);
-                msg.sequence = sequence;
-                return msg;
-            }
-            case DaemonControlMessages.TYPE_FREEZE_ROTATION: {
-                long sequence = dis.readLong();
-                int displayId = dis.readInt();
-                int rotation = dis.readInt();
-                ControlMessage msg = DaemonControlMessages.createFreezeRotation(displayId, rotation);
-                msg.sequence = sequence;
-                return msg;
-            }
-            case DaemonControlMessages.TYPE_THAW_ROTATION: {
-                long sequence = dis.readLong();
-                int displayId = dis.readInt();
-                ControlMessage msg = DaemonControlMessages.createThawRotation(displayId);
-                msg.sequence = sequence;
-                return msg;
-            }
-            case DaemonControlMessages.TYPE_IS_ROTATION_FROZEN: {
-                long sequence = dis.readLong();
-                int displayId = dis.readInt();
-                ControlMessage msg = DaemonControlMessages.createIsRotationFrozen(displayId);
-                msg.sequence = sequence;
-                return msg;
-            }
-            case DaemonControlMessages.TYPE_GET_ACTIVE_DISPLAY_INFOS: {
-                long sequence = dis.readLong();
-                ControlMessage msg = DaemonControlMessages.createGetActiveDisplayInfos();
-                msg.sequence = sequence;
-                return msg;
-            }
+            case DaemonControlMessages.TYPE_EXIT_DAEMON:
+                return DaemonControlMessages.createExitDaemon(dis.readLong());
+            case DaemonControlMessages.TYPE_START_VIDEO_STREAM:
+                return DaemonControlMessages.createStartVideoStream(dis.readLong(), dis.readInt());
+            case DaemonControlMessages.TYPE_STOP_VIDEO_STREAM:
+                return DaemonControlMessages.createStopVideoStream(dis.readLong());
+            case DaemonControlMessages.TYPE_GET_ROTATION:
+                return DaemonControlMessages.createGetRotation(dis.readLong(), dis.readInt());
+            case DaemonControlMessages.TYPE_FREEZE_ROTATION:
+                return DaemonControlMessages.createFreezeRotation(dis.readLong(), dis.readInt(), dis.readInt());
+            case DaemonControlMessages.TYPE_THAW_ROTATION:
+                return DaemonControlMessages.createThawRotation(dis.readLong(), dis.readInt());
+            case DaemonControlMessages.TYPE_IS_ROTATION_FROZEN:
+                return DaemonControlMessages.createIsRotationFrozen(dis.readLong(), dis.readInt());
+            case DaemonControlMessages.TYPE_GET_ACTIVE_DISPLAY_INFOS:
+                return DaemonControlMessages.createGetActiveDisplayInfos(dis.readLong());
             default:
                 return null;
         }
@@ -110,17 +72,13 @@ public final class DaemonControlMessageReader {
         int height = dis.readInt();
         int dpi = dis.readInt();
         int flags = dis.readInt();
-        ControlMessage msg = DaemonControlMessages.createCreateVirtualDisplay(name, width, height, dpi, flags);
-        msg.sequence = sequence;
-        return msg;
+        return DaemonControlMessages.createCreateVirtualDisplay(sequence, name, width, height, dpi, flags);
     }
 
     private static ControlMessage parseReleaseVirtualDisplay(DataInputStream dis) throws IOException {
         long sequence = dis.readLong();
         int displayId = dis.readInt();
-        ControlMessage msg = DaemonControlMessages.createReleaseVirtualDisplay(displayId);
-        msg.sequence = sequence;
-        return msg;
+        return DaemonControlMessages.createReleaseVirtualDisplay(sequence, displayId);
     }
 
     private static ControlMessage parseResizeVirtualDisplay(DataInputStream dis) throws IOException {
@@ -129,18 +87,14 @@ public final class DaemonControlMessageReader {
         int width = dis.readInt();
         int height = dis.readInt();
         int dpi = dis.readInt();
-        ControlMessage msg = DaemonControlMessages.createResizeVirtualDisplay(displayId, width, height, dpi);
-        msg.sequence = sequence;
-        return msg;
+        return DaemonControlMessages.createResizeVirtualDisplay(sequence, displayId, width, height, dpi);
     }
 
     private static ControlMessage parseStartActivityWithDisplay(DataInputStream dis) throws IOException {
         long sequence = dis.readLong();
         String packageName = parseString(dis);
         int displayId = dis.readInt();
-        ControlMessage msg = DaemonControlMessages.createStartActivity(packageName, displayId);
-        msg.sequence = sequence;
-        return msg;
+        return DaemonControlMessages.createStartActivity(sequence, packageName, displayId);
     }
 
     private static ControlMessage parseInjectInputEventWithDisplayId(DataInputStream dis) throws IOException {
@@ -148,16 +102,12 @@ public final class DaemonControlMessageReader {
         int displayId = dis.readInt();
         boolean isKeyEvent = dis.readByte() != 0;
         byte[] parcelBytes = parseByteArray(dis, 4);
-        ControlMessage msg = DaemonControlMessages.createInjectInputEventWithDisplayId(displayId, isKeyEvent, parcelBytes);
-        msg.sequence = sequence;
-        return msg;
+        return DaemonControlMessages.createInjectInputEventWithDisplayId(sequence, displayId, isKeyEvent, parcelBytes);
     }
 
     private static ControlMessage parseSwitchDisplay(DataInputStream dis) throws IOException {
         long sequence = dis.readLong();
         int displayId = dis.readInt();
-        ControlMessage msg = DaemonControlMessages.createSwitchDisplay(displayId);
-        msg.sequence = sequence;
-        return msg;
+        return DaemonControlMessages.createSwitchDisplay(sequence, displayId);
     }
 }
