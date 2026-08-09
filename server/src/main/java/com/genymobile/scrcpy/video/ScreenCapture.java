@@ -140,41 +140,8 @@ public class ScreenCapture extends SurfaceCapture {
         }
         isDaemonManaged = false;
 
-        if (externalDisplayProvider != null) {
-            VirtualDisplay daemonVD = externalDisplayProvider.get(displayId);
-            if (daemonVD != null) {
-                Ln.i("ScreenCapture: using daemon-managed virtual display directly (displayId=" + displayId + ")");
-                try {
-                    if (virtualDisplay != null) {
-                        virtualDisplay.setSurface(null);
-                    }
-                    daemonVD.setSurface(surface);
-                    virtualDisplay = daemonVD;
-                    isDaemonManaged = true;
-                    try {
-                        boolean powered = ServiceManager.getDisplayManager().requestDisplayPower(displayId, true);
-                        Ln.i("ScreenCapture: requestDisplayPower(" + displayId + ", true) = " + powered);
-                    } catch (Throwable t) {
-                         Ln.w("ScreenCapture: requestDisplayPower not supported: " + t.getMessage());
-                    }
-
-                    if (vdListener != null) {
-                        PositionMapper positionMapper;
-                        if (transform != null) {
-                            Size inputSize = displayInfo != null ? displayInfo.getSize() : new Size(daemonVD.getDisplay().getWidth(), daemonVD.getDisplay().getHeight());
-                            positionMapper = PositionMapper.create(videoSize, transform, inputSize);
-                        } else {
-                            Size displaySize = new Size(daemonVD.getDisplay().getWidth(), daemonVD.getDisplay().getHeight());
-                            positionMapper = PositionMapper.create(videoSize, transform, displaySize);
-                        }
-                        vdListener.onNewVirtualDisplay(displayId, positionMapper);
-                    }
-                } catch (Exception e) {
-                    Ln.e("ScreenCapture: failed to bind surface to daemon virtual display", e);
-                    throw new IOException("Failed to bind surface to daemon virtual display", e);
-                }
-                return;
-            }
+        if (externalDisplayProvider != null && bindDaemonVirtualDisplay(surface)) {
+            return;
         }
 
         Size inputSize;
@@ -233,6 +200,54 @@ public class ScreenCapture extends SurfaceCapture {
             }
             vdListener.onNewVirtualDisplay(virtualDisplayId, positionMapper);
         }
+    }
+
+    /**
+     * Bind the capture surface to a daemon-managed virtual display registered for the current
+     * {@code displayId}, if any. Returns {@code true} when a daemon virtual display handled the
+     * surface (in which case {@code start()} returns immediately); {@code false} to fall through
+     * to the upstream DisplayManager/SurfaceControl path.
+     *
+     * <p>This isolates the daemon projection branch so the upstream {@code start()} body stays
+     * intact and merges cleanly.
+     */
+    private boolean bindDaemonVirtualDisplay(Surface surface) throws IOException {
+        VirtualDisplay daemonVD = externalDisplayProvider.get(displayId);
+        if (daemonVD == null) {
+            return false;
+        }
+        Ln.i("ScreenCapture: using daemon-managed virtual display directly (displayId=" + displayId + ")");
+        try {
+            if (virtualDisplay != null) {
+                virtualDisplay.setSurface(null);
+            }
+            daemonVD.setSurface(surface);
+            virtualDisplay = daemonVD;
+            isDaemonManaged = true;
+            try {
+                boolean powered = ServiceManager.getDisplayManager().requestDisplayPower(displayId, true);
+                Ln.i("ScreenCapture: requestDisplayPower(" + displayId + ", true) = " + powered);
+            } catch (Throwable t) {
+                Ln.w("ScreenCapture: requestDisplayPower not supported: " + t.getMessage());
+            }
+
+            if (vdListener != null) {
+                PositionMapper positionMapper;
+                if (transform != null) {
+                    Size inputSize = displayInfo != null ? displayInfo.getSize()
+                            : new Size(daemonVD.getDisplay().getWidth(), daemonVD.getDisplay().getHeight());
+                    positionMapper = PositionMapper.create(videoSize, transform, inputSize);
+                } else {
+                    Size displaySize = new Size(daemonVD.getDisplay().getWidth(), daemonVD.getDisplay().getHeight());
+                    positionMapper = PositionMapper.create(videoSize, transform, displaySize);
+                }
+                vdListener.onNewVirtualDisplay(displayId, positionMapper);
+            }
+        } catch (Exception e) {
+            Ln.e("ScreenCapture: failed to bind surface to daemon virtual display", e);
+            throw new IOException("Failed to bind surface to daemon virtual display", e);
+        }
+        return true;
     }
 
     @Override
