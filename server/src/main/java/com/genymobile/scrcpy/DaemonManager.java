@@ -3,26 +3,33 @@ package com.genymobile.scrcpy;
 import com.genymobile.scrcpy.AndroidVersions;
 import com.genymobile.scrcpy.FakeContext;
 import com.genymobile.scrcpy.util.Ln;
+import com.genymobile.scrcpy.compat.DisplayCompat;
 import com.genymobile.scrcpy.wrappers.ServiceManager;
 
 import android.app.ActivityOptions;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.graphics.PixelFormat;
 import android.hardware.display.VirtualDisplay;
+import android.media.ImageReader;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.HandlerThread;
 
 import java.util.HashMap;
+import java.util.Locale;
 import java.util.Map;
 
 public final class DaemonManager {
 
     private static DaemonManager instance;
 
-    private final Map<Integer, VirtualDisplay> activeDisplays = new HashMap<>();
+    private final Map<Integer, VirtualDisplaySession> activeSessions = new HashMap<>();
     private final Object activeDisplaysLock = new Object();
 
     private volatile int targetDisplayId = 0;
+    private volatile boolean exitDaemonRequested = false;
 
     private DaemonManager() {
     }
@@ -43,20 +50,104 @@ public final class DaemonManager {
         Ln.i("DaemonManager: targetDisplayId set to " + displayId);
     }
 
+    public boolean isExitDaemonRequested() {
+        return exitDaemonRequested;
+    }
+
+    public void requestExitDaemon() {
+        this.exitDaemonRequested = true;
+    }
+
+    public void resetExitDaemon() {
+        this.exitDaemonRequested = false;
+    }
+
+    public VirtualDisplay getVirtualDisplay(int displayId) {
+        synchronized (activeDisplaysLock) {
+            VirtualDisplaySession session = activeSessions.get(displayId);
+            return session != null ? session.getVirtualDisplay() : null;
+        }
+    }
+
+    public boolean hasDisplay(int displayId) {
+        synchronized (activeDisplaysLock) {
+            return activeSessions.containsKey(displayId);
+        }
+    }
+
+    public void setDisplaySurface(int displayId, android.view.Surface surface) {
+        VirtualDisplaySession session;
+        synchronized (activeDisplaysLock) {
+            session = activeSessions.get(displayId);
+        }
+        if (session != null) {
+            session.setExternalSurface(surface);
+            Ln.i("DaemonManager: setDisplaySurface for displayId=" + displayId + ", surface=" + surface);
+        } else {
+            Ln.w("DaemonManager: setDisplaySurface failed, displayId=" + displayId + " not found");
+        }
+    }
+
+    public void restoreFallbackSurface(int displayId) {
+        VirtualDisplaySession session;
+        synchronized (activeDisplaysLock) {
+            session = activeSessions.get(displayId);
+        }
+        if (session != null) {
+            session.restoreFallbackSurface();
+        }
+    }
+
     public int createVirtualDisplay(String name, int width, int height, int dpi, int flags) {
         VirtualDisplay vd = null;
+        ImageReader imageReader = null;
+        HandlerThread readerThread = null;
         try {
             Ln.i("DaemonManager: createVirtualDisplay name=" + name + ", width=" + width + ", height=" + height + ", dpi=" + dpi + ", flags=0x" + Integer.toHexString(flags));
+
+            readerThread = new HandlerThread("VDReader-" + name);
+            readerThread.start();
+            imageReader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 2);
+            imageReader.setOnImageAvailableListener(reader -> {
+                try {
+                    android.media.Image img = reader.acquireLatestImage();
+                    if (img != null) {
+                        img.close();
+                    }
+                } catch (Throwable t) {
+                    Ln.w("DaemonManager: ImageReader error", t);
+                }
+            }, new Handler(readerThread.getLooper()));
+
             vd = ServiceManager.getDisplayManager()
-                    .createNewVirtualDisplay(name, width, height, dpi, null, flags);
+                    .createNewVirtualDisplay(name, width, height, dpi, imageReader.getSurface(), flags);
             int displayId = vd.getDisplay().getDisplayId();
-            synchronized (activeDisplaysLock) {
-                activeDisplays.put(displayId, vd);
+
+            boolean powered = false;
+            try {
+                powered = ServiceManager.getDisplayManager().requestDisplayPower(displayId, true);
+                Ln.i("DaemonManager: requestDisplayPower(" + displayId + ", true) returned: " + powered);
+            } catch (Throwable t) {
+                Ln.w("DaemonManager: requestDisplayPower not supported on this device/Android version: " + t.getMessage());
             }
-            Ln.i("DaemonManager: created virtual display id=" + displayId + " (" + width + "x" + height + "/" + dpi + ")");
+
+            VirtualDisplaySession session = new VirtualDisplaySession(displayId, name, vd, imageReader, readerThread);
+            synchronized (activeDisplaysLock) {
+                activeSessions.put(displayId, session);
+            }
+            Ln.i("DaemonManager: created virtual display id=" + displayId + " (" + width + "x" + height + "/" + dpi + "), powered=" + powered);
             return displayId;
         } catch (Exception e) {
             Ln.e("DaemonManager: failed to create virtual display", e);
+            if (imageReader != null) {
+                try {
+                    imageReader.close();
+                } catch (Exception ignore) {
+                }
+            }
+            if (readerThread != null) {
+                readerThread.quitSafely();
+            }
             if (vd != null) {
                 try {
                     vd.release();
@@ -69,14 +160,15 @@ public final class DaemonManager {
     }
 
     public boolean releaseVirtualDisplay(int displayId) {
-        VirtualDisplay vd;
+        VirtualDisplaySession session;
         synchronized (activeDisplaysLock) {
-            vd = activeDisplays.remove(displayId);
+            session = activeSessions.remove(displayId);
         }
-        if (vd != null) {
+
+        if (session != null) {
             try {
-                moveTasksToDefaultDisplay(displayId);
-                vd.release();
+                DisplayCompat.moveTasksToDefaultDisplay(displayId);
+                session.close();
                 Ln.i("DaemonManager: released virtual display id=" + displayId);
                 return true;
             } catch (Exception e) {
@@ -84,19 +176,44 @@ public final class DaemonManager {
                 return false;
             }
         }
-        Ln.w("DaemonManager: display id=" + displayId + " not found for release");
-        return false;
+        Ln.w("DaemonManager: display id=" + displayId + " not found in activeSessions, performing best-effort release of orphan display");
+        return DisplayCompat.bestEffortReleaseOrphan(displayId);
     }
 
     public boolean resizeVirtualDisplay(int displayId, int width, int height, int dpi) {
-        VirtualDisplay vd;
+        VirtualDisplaySession session;
         synchronized (activeDisplaysLock) {
-            vd = activeDisplays.get(displayId);
+            session = activeSessions.get(displayId);
         }
-        if (vd != null) {
+        if (session != null) {
             try {
-                vd.resize(width, height, dpi);
+                session.getVirtualDisplay().resize(width, height, dpi);
                 Ln.i("DaemonManager: resized virtual display id=" + displayId + " to " + width + "x" + height + "/" + dpi);
+
+                ImageReader oldReader = session.getImageReader();
+                HandlerThread readerThread = session.getReaderThread();
+                if (oldReader != null && readerThread != null) {
+                    try {
+                        oldReader.close();
+                    } catch (Exception ignore) {
+                    }
+                    Handler handler = new Handler(readerThread.getLooper());
+                    ImageReader newReader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 2);
+                    newReader.setOnImageAvailableListener(reader -> {
+                        try {
+                            android.media.Image img = reader.acquireLatestImage();
+                            if (img != null) {
+                                img.close();
+                            }
+                        } catch (Throwable t) {
+                            Ln.w("DaemonManager: ImageReader error during resize", t);
+                        }
+                    }, handler);
+                    session.setImageReader(newReader);
+
+                    android.view.Surface currentSurface = session.getExternalSurface();
+                    session.getVirtualDisplay().setSurface(currentSurface != null ? currentSurface : newReader.getSurface());
+                }
                 return true;
             } catch (Exception e) {
                 Ln.e("DaemonManager: failed to resize virtual display id=" + displayId, e);
@@ -139,9 +256,9 @@ public final class DaemonManager {
 
     public int[] getActiveDisplayIds() {
         synchronized (activeDisplaysLock) {
-            int[] ids = new int[activeDisplays.size()];
+            int[] ids = new int[activeSessions.size()];
             int i = 0;
-            for (int id : activeDisplays.keySet()) {
+            for (int id : activeSessions.keySet()) {
                 ids[i++] = id;
             }
             return ids;
@@ -149,58 +266,17 @@ public final class DaemonManager {
     }
 
     public void releaseAll() {
+        int[] ids;
         synchronized (activeDisplaysLock) {
-            for (VirtualDisplay vd : activeDisplays.values()) {
-                try {
-                    vd.release();
-                } catch (Exception e) {
-                    Ln.e("DaemonManager: failed to release display during cleanup", e);
-                }
+            ids = new int[activeSessions.size()];
+            int i = 0;
+            for (int id : activeSessions.keySet()) {
+                ids[i++] = id;
             }
-            activeDisplays.clear();
+        }
+        for (int id : ids) {
+            releaseVirtualDisplay(id);
         }
         Ln.i("DaemonManager: all virtual displays released");
-    }
-
-    private void moveTasksToDefaultDisplay(int displayId) {
-        try {
-            Ln.i("DaemonManager: Checking tasks on display " + displayId + " to move back to display 0");
-            android.os.IBinder binder = (android.os.IBinder) Class.forName("android.os.ServiceManager")
-                    .getMethod("getService", String.class)
-                    .invoke(null, "activity_task");
-            android.os.IInterface atm = (android.os.IInterface) Class.forName("android.app.IActivityTaskManager$Stub")
-                    .getMethod("asInterface", android.os.IBinder.class)
-                    .invoke(null, binder);
-
-            java.lang.reflect.Method getRecentTasksMethod = atm.getClass()
-                    .getMethod("getRecentTasks", int.class, int.class, int.class);
-            // 50 maxTasks, flags = 0, userId = -2 (USER_CURRENT)
-            Object parceledList = getRecentTasksMethod.invoke(atm, 50, 0, -2);
-
-            java.lang.reflect.Method getListMethod = parceledList.getClass().getMethod("getList");
-            java.util.List<?> list = (java.util.List<?>) getListMethod.invoke(parceledList);
-
-            if (list != null) {
-                for (Object taskInfo : list) {
-                    int taskDisplayId = taskInfo.getClass().getField("displayId").getInt(taskInfo);
-                    int taskId = taskInfo.getClass().getField("taskId").getInt(taskInfo);
-
-                    if (taskDisplayId == displayId) {
-                        Ln.i("DaemonManager: Moving task " + taskId + " back to display 0");
-                        try {
-                            java.lang.reflect.Method moveRootTaskToDisplay = atm.getClass()
-                                    .getMethod("moveRootTaskToDisplay", int.class, int.class);
-                            moveRootTaskToDisplay.invoke(atm, taskId, 0);
-                        } catch (NoSuchMethodException e) {
-                            java.lang.reflect.Method moveStackToDisplay = atm.getClass()
-                                    .getMethod("moveStackToDisplay", int.class, int.class);
-                            moveStackToDisplay.invoke(atm, taskId, 0);
-                        }
-                    }
-                }
-            }
-        } catch (Exception e) {
-            Ln.e("DaemonManager: Failed to move tasks back to display 0", e);
-        }
     }
 }
