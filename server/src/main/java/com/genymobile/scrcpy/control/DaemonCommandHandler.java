@@ -6,7 +6,6 @@ import com.genymobile.scrcpy.device.Device;
 import com.genymobile.scrcpy.util.Ln;
 import com.genymobile.scrcpy.video.SurfaceCapture;
 import com.genymobile.scrcpy.video.ScreenCapture;
-import com.genymobile.scrcpy.wrappers.ServiceManager;
 
 import android.os.Parcel;
 import android.view.InputEvent;
@@ -125,16 +124,27 @@ public class DaemonCommandHandler {
             parcel.recycle();
 
             int targetDisplayId = msg.getDisplayId();
-            boolean ok;
+            boolean ok = Device.injectEvent(event, targetDisplayId, Device.INJECT_MODE_ASYNC);
 
-            if (targetDisplayId == 0) {
-                ok = ServiceManager.getInputManager().injectInputEvent(event, Device.INJECT_MODE_ASYNC);
-            } else {
-                com.genymobile.scrcpy.wrappers.InputManager.setDisplayId(event, targetDisplayId);
-                ok = Device.injectEvent(event, targetDisplayId, Device.INJECT_MODE_ASYNC);
+            Ln.d("handleInjectInputEvent: displayId=" + targetDisplayId
+                    + ", isKey=" + msg.isKeyEvent()
+                    + ", result=" + ok);
+
+            if (!ok && targetDisplayId == 0 && event instanceof MotionEvent) {
+                MotionEvent me = (MotionEvent) event;
+                float x = me.getX();
+                float y = me.getY();
+                String inputCmd = "input tap " + (int) x + " " + (int) y;
+                try {
+                    Ln.d("handleInjectInputEvent: fallback to shell: " + inputCmd);
+                    Process p = Runtime.getRuntime().exec(new String[]{"su", "-c", inputCmd});
+                    p.waitFor();
+                    ok = (p.exitValue() == 0);
+                    Ln.d("handleInjectInputEvent: shell result=" + ok + " (exit=" + p.exitValue() + ")");
+                } catch (Throwable t) {
+                    Ln.w("handleInjectInputEvent: shell fallback failed: " + t.getMessage());
+                }
             }
-
-            Ln.d("handleInjectInputEvent: displayId=" + targetDisplayId + ", result=" + ok);
 
             if (!ok) {
                 throw new RuntimeException("FAILED");

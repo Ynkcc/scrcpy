@@ -35,6 +35,7 @@ import java.io.IOException;
 import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
 
 public final class Server {
 
@@ -47,11 +48,15 @@ public final class Server {
     }
 
     private static class Completion {
+        private final int total;
         private int running;
         private boolean fatalError;
+        private final CountDownLatch latch;
 
-        Completion(int running) {
+        Completion(int running, boolean useLatch) {
+            this.total = running;
             this.running = running;
+            this.latch = useLatch ? new CountDownLatch(1) : null;
         }
 
         synchronized void addCompleted(boolean fatalError) {
@@ -60,8 +65,24 @@ public final class Server {
                 this.fatalError = true;
             }
             if (running == 0 || this.fatalError) {
-                Looper.getMainLooper().quitSafely();
+                if (latch != null) {
+                    latch.countDown();
+                } else {
+                    Looper.getMainLooper().quitSafely();
+                }
             }
+        }
+
+        void await() throws InterruptedException {
+            if (latch != null) {
+                latch.await();
+            } else {
+                Looper.loop();
+            }
+        }
+
+        boolean isFatalError() {
+            return fatalError;
         }
     }
 
@@ -104,30 +125,23 @@ public final class Server {
         List<AsyncProcessor> asyncProcessors = new ArrayList<>();
 
         boolean isDaemon = daemonOptions != null && daemonOptions.isDaemonMode();
-        int customPort = daemonOptions != null ? daemonOptions.getPort() : -1;
-        DesktopConnection connection = null;
-        TcpDesktopConnection tcpConnection = null;
+        DesktopConnection connection;
 
         if (isDaemon) {
-            tcpConnection = TcpDesktopConnection.open(scid, customPort, tunnelForward, video, audio, control, sendDummyByte);
-        } else {
-            connection = DesktopConnection.open(scid, tunnelForward, video, audio, control, sendDummyByte);
+            throw new IllegalStateException("Daemon mode must use DaemonServer");
         }
+        connection = DesktopConnection.open(scid, tunnelForward, video, audio, control, sendDummyByte);
 
         try {
             String deviceName = Device.getDeviceName();
             if (options.getSendDeviceMeta()) {
-                if (isDaemon) {
-                    tcpConnection.sendDeviceMeta(deviceName);
-                } else {
-                    connection.sendDeviceMeta(deviceName);
-                }
+                connection.sendDeviceMeta(deviceName);
             }
 
             Controller controller = null;
 
             if (control) {
-                ControlChannel controlChannel = isDaemon ? tcpConnection.getControlChannel() : connection.getControlChannel();
+                ControlChannel controlChannel = connection.getControlChannel();
                 controller = new Controller(controlChannel, cleanUp, options);
                 asyncProcessors.add(controller);
             }
@@ -142,7 +156,7 @@ public final class Server {
                     audioCapture = new AudioPlaybackCapture(options.getAudioDup());
                 }
 
-                Streamer audioStreamer = new Streamer(isDaemon ? tcpConnection.getAudioFd() : connection.getAudioFd(), audioCodec,
+                Streamer audioStreamer = new Streamer(connection.getAudioFd(), audioCodec,
                         options.getSendStreamMeta(), options.getSendFrameMeta());
                 AsyncProcessor audioRecorder;
                 if (audioCodec == AudioCodec.RAW) {
@@ -154,7 +168,7 @@ public final class Server {
             }
 
             if (video) {
-                Streamer videoStreamer = new Streamer(isDaemon ? tcpConnection.getVideoFd() : connection.getVideoFd(),
+                Streamer videoStreamer = new Streamer(connection.getVideoFd(),
                         options.getVideoCodec(), options.getSendStreamMeta(), options.getSendFrameMeta());
                 SurfaceCapture surfaceCapture;
                 if (options.getVideoSource() == VideoSource.DISPLAY) {
@@ -162,14 +176,7 @@ public final class Server {
                     if (newDisplay != null) {
                         surfaceCapture = new NewDisplayCapture(controller, options);
                     } else {
-                        Options captureOptions = options;
-                        if (isDaemon) {
-                            int targetDisplayId = DaemonManager.getInstance().getTargetDisplayId();
-                            if (targetDisplayId != 0) {
-                                captureOptions = options.copyWithDisplayId(targetDisplayId);
-                            }
-                        }
-                        surfaceCapture = new ScreenCapture(controller, captureOptions);
+                        surfaceCapture = new ScreenCapture(controller, options);
                     }
                 } else {
                     surfaceCapture = new CameraCapture(options);
@@ -182,14 +189,19 @@ public final class Server {
                 }
             }
 
-            Completion completion = new Completion(asyncProcessors.size());
+            Completion completion = new Completion(asyncProcessors.size(), false);
             for (AsyncProcessor asyncProcessor : asyncProcessors) {
                 asyncProcessor.start((fatalError) -> {
                     completion.addCompleted(fatalError);
                 });
             }
 
-            Looper.loop(); // interrupted by the Completion implementation
+            try {
+                completion.await();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                Ln.w("Interrupted while waiting for completion");
+            }
         } finally {
             if (cleanUp != null) {
                 cleanUp.interrupt();
@@ -198,11 +210,7 @@ public final class Server {
                 asyncProcessor.stop();
             }
 
-            if (isDaemon) {
-                tcpConnection.shutdown();
-            } else {
-                connection.shutdown();
-            }
+            connection.shutdown();
 
             try {
                 if (cleanUp != null) {
@@ -217,11 +225,7 @@ public final class Server {
                 // ignore
             }
 
-            if (isDaemon) {
-                tcpConnection.close();
-            } else {
-                connection.close();
-            }
+            connection.close();
         }
     }
 
@@ -269,6 +273,11 @@ public final class Server {
                         opts.setPort(port);
                     }
                 } catch (NumberFormatException ignored) {
+                }
+            } else if (arg.startsWith("--bind_address=")) {
+                String address = arg.substring("--bind_address=".length());
+                if (!address.isEmpty()) {
+                    opts.setBindAddress(address);
                 }
             }
         }
@@ -322,7 +331,18 @@ public final class Server {
         }
 
         if (daemonOptions.isDaemonMode()) {
-            DaemonRunner.run(options, daemonOptions, (opts, dos) -> scrcpy(opts, dos));
+            try {
+                TcpDesktopConnection.initServerSocket(options.getScid(), daemonOptions.getPort(), daemonOptions.getBindAddress());
+            } catch (IOException e) {
+                Ln.e("Failed to initialize daemon server socket", e);
+                throw e;
+            }
+            try {
+                DaemonServer daemonServer = new DaemonServer(options, daemonOptions);
+                daemonServer.run();
+            } finally {
+                TcpDesktopConnection.closeServerSocket();
+            }
         } else {
             scrcpy(options, null);
         }
