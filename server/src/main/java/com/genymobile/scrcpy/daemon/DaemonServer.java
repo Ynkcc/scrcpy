@@ -127,7 +127,9 @@ public final class DaemonServer {
             TcpDesktopConnection.writeSessionId(socket, sessionId);
         } catch (IOException e) {
             Ln.w("Failed to write sessionId: " + e.getMessage());
-            try { socket.close(); } catch (IOException ignored) {}
+            try { socket.close(); } catch (IOException closeEx) {
+                Ln.d("Failed to close control socket after sessionId write failure: " + closeEx.getMessage());
+            }
             return;
         }
 
@@ -136,7 +138,9 @@ public final class DaemonServer {
             session = new ClientSession(socket, sessionId, options, baseArgs, registry, surfaceBroker, exitCoordinator, this);
         } catch (IOException e) {
             Ln.w("Failed to create client session: " + e.getMessage());
-            try { socket.close(); } catch (IOException ignored) {}
+            try { socket.close(); } catch (IOException closeEx) {
+                Ln.d("Failed to close control socket after session creation failure: " + closeEx.getMessage());
+            }
             return;
         }
 
@@ -167,7 +171,9 @@ public final class DaemonServer {
             session.onVideoSocket(socket);
         } catch (IOException e) {
             Ln.w("Failed to handle video socket: " + e.getMessage());
-            try { socket.close(); } catch (IOException ignored) {}
+            try { socket.close(); } catch (IOException closeEx) {
+                Ln.d("Failed to close video socket after handling error: " + closeEx.getMessage());
+            }
         }
     }
 
@@ -183,7 +189,9 @@ public final class DaemonServer {
             session.onAudioSocket(socket);
         } catch (IOException e) {
             Ln.w("Failed to handle audio socket: " + e.getMessage());
-            try { socket.close(); } catch (IOException ignored) {}
+            try { socket.close(); } catch (IOException closeEx) {
+                Ln.d("Failed to close audio socket after handling error: " + closeEx.getMessage());
+            }
         }
     }
 

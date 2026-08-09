@@ -1,6 +1,7 @@
 package com.genymobile.scrcpy.daemon.control;
 
 import com.genymobile.scrcpy.control.DeviceMessage;
+import com.genymobile.scrcpy.display.DisplayInfo;
 
 import java.io.DataOutputStream;
 import java.io.IOException;
@@ -29,6 +30,18 @@ public final class DaemonDeviceMessageWriter {
                 dos.writeInt(ids.length);
                 for (int id : ids) {
                     dos.writeInt(id);
+                }
+                return true;
+            case DaemonDeviceMessages.TYPE_RESPONSE_ACTIVE_DISPLAY_INFOS:
+                dos.writeLong(msg.getSequence());
+                DisplayInfo[] infos = msg.getDisplayInfos();
+                dos.writeInt(infos.length);
+                for (DisplayInfo info : infos) {
+                    dos.writeInt(info.getDisplayId());
+                    dos.writeInt(info.getSize().getWidth());
+                    dos.writeInt(info.getSize().getHeight());
+                    dos.writeInt(info.getDpi());
+                    dos.writeInt(info.getRotation());
                 }
                 return true;
             default:

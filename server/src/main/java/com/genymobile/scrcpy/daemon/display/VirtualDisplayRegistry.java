@@ -11,10 +11,13 @@ import android.media.ImageReader;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.view.Surface;
+
 import java.util.HashMap;
 import java.util.Map;
 
 public final class VirtualDisplayRegistry {
+
+    private static final int IMAGE_READER_MAX_IMAGES = 5; // larger buffer to reduce frame drops
 
     private final Map<Integer, VirtualDisplaySession> activeSessions = new HashMap<>();
     private final Object activeDisplaysLock = new Object();
@@ -50,7 +53,7 @@ public final class VirtualDisplayRegistry {
 
             readerThread = new HandlerThread("VDReader-" + name);
             readerThread.start();
-            imageReader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 2);
+            imageReader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, IMAGE_READER_MAX_IMAGES);
             imageReader.setOnImageAvailableListener(reader -> {
                 try {
                     android.media.Image img = reader.acquireLatestImage();
@@ -74,6 +77,18 @@ public final class VirtualDisplayRegistry {
                 Ln.w("VirtualDisplayRegistry: requestDisplayPower not supported on this device/Android version: " + t.getMessage());
             }
 
+            // Isolate virtual display rotation: freeze the initial orientation so that
+            // (a) the main screen rotation never rotates the virtual display, and
+            // (b) rotation requests inside the virtual display never propagate to the main screen or this app.
+            // Use the initial natural rotation (ROTATION_0) as the frozen orientation.
+            //
+            // The WindowManager may not have registered the newly-created display yet
+            // when freezeRotation() is invoked here; that call would then silently fail
+            // (the exception is caught inside WindowManager.freezeRotation()). Verify
+            // with isRotationFrozen() and retry a few times to bridge the registration
+            // race. See RotationController / TYPE_IS_ROTATION_FROZEN for the query path.
+            freezeRotationWithRetry(displayId, Surface.ROTATION_0);
+
             VirtualDisplaySession session = new VirtualDisplaySession(displayId, name, vd, imageReader, readerThread);
             synchronized (activeDisplaysLock) {
                 activeSessions.put(displayId, session);
@@ -86,6 +101,7 @@ public final class VirtualDisplayRegistry {
                 try {
                     imageReader.close();
                 } catch (Exception ignore) {
+                    Ln.d("VirtualDisplayRegistry: failed to close ImageReader during create failure cleanup: " + ignore.getMessage());
                 }
             }
             if (readerThread != null) {
@@ -110,6 +126,14 @@ public final class VirtualDisplayRegistry {
 
         if (session != null) {
             try {
+                // Thaw (un-freeze) rotation before releasing the virtual display
+                // so any previously frozen orientation state is released back to the system.
+                try {
+                    ServiceManager.getWindowManager().thawRotation(displayId);
+                    Ln.i("VirtualDisplayRegistry: thawed rotation for display id=" + displayId);
+                } catch (Throwable t) {
+                    Ln.w("VirtualDisplayRegistry: failed to thaw rotation for displayId=" + displayId, t);
+                }
                 DisplayCompat.moveTasksToDefaultDisplay(displayId);
                 session.close();
                 Ln.i("VirtualDisplayRegistry: released virtual display id=" + displayId);
@@ -163,6 +187,12 @@ public final class VirtualDisplayRegistry {
                     vd.resize(width, height, dpi);
                     Ln.i("VirtualDisplayRegistry: resized virtual display id=" + displayId + " to " + width + "x" + height
                             + "/" + dpi + " (external surface, reader untouched)");
+                    // Re-freeze rotation after resize to ensure orientation stays isolated.
+                    try {
+                        ServiceManager.getWindowManager().freezeRotation(displayId, Surface.ROTATION_0);
+                    } catch (Throwable ignore) {
+                        Ln.w("VirtualDisplayRegistry: freezeRotation failed (best-effort) for displayId=" + displayId, ignore);
+                    }
                     return true;
                 }
 
@@ -171,6 +201,11 @@ public final class VirtualDisplayRegistry {
                     vd.resize(width, height, dpi);
                     Ln.i("VirtualDisplayRegistry: resized virtual display id=" + displayId + " to " + width + "x" + height
                             + "/" + dpi + " (no reader)");
+                    try {
+                        ServiceManager.getWindowManager().freezeRotation(displayId, Surface.ROTATION_0);
+                    } catch (Throwable ignore) {
+                        Ln.w("VirtualDisplayRegistry: freezeRotation failed (best-effort) for displayId=" + displayId, ignore);
+                    }
                     return true;
                 }
 
@@ -181,7 +216,7 @@ public final class VirtualDisplayRegistry {
                 // The old surface is released only AFTER the new one is bound, so the display
                 // always has a valid render target. (The previous implementation closed the old
                 // reader before creating the new one, leaving a frame-drop window.)
-                ImageReader newReader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 2);
+                ImageReader newReader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, IMAGE_READER_MAX_IMAGES);
                 try {
                     newReader.setOnImageAvailableListener(reader -> {
                         try {
@@ -196,10 +231,17 @@ public final class VirtualDisplayRegistry {
 
                     vd.setSurface(newReader.getSurface());
                     vd.resize(width, height, dpi);
+                    // Re-freeze rotation to keep virtual display orientation isolated
+                    try {
+                        ServiceManager.getWindowManager().freezeRotation(displayId, Surface.ROTATION_0);
+                    } catch (Throwable ignore) {
+                        Ln.w("VirtualDisplayRegistry: freezeRotation failed (best-effort) for displayId=" + displayId, ignore);
+                    }
                 } catch (Exception e) {
                     try {
                         newReader.close();
                     } catch (Exception ignore) {
+                        Ln.d("VirtualDisplayRegistry: failed to close newReader during resize failure cleanup: " + ignore.getMessage());
                     }
                     throw e;
                 }
@@ -208,6 +250,7 @@ public final class VirtualDisplayRegistry {
                 try {
                     oldReader.close();
                 } catch (Exception ignore) {
+                    Ln.d("VirtualDisplayRegistry: failed to close oldReader after atomic swap: " + ignore.getMessage());
                 }
 
                 Ln.i("VirtualDisplayRegistry: resized virtual display id=" + displayId + " to " + width + "x" + height
@@ -231,6 +274,40 @@ public final class VirtualDisplayRegistry {
         }
     }
 
+    /**
+     * Snapshot of the active virtual display ids with their live DisplayInfo
+     * (width/height/dpi/rotation). The ids are snapshotted under the registry
+     * lock, then each DisplayInfo is queried outside the lock to avoid holding
+     * it during reflection / dumpsys fallback inside DisplayManager.
+     *
+     * @return array of DisplayInfo, one per active virtual display; entries
+     *         whose DisplayInfo cannot be resolved are omitted
+     */
+    public com.genymobile.scrcpy.display.DisplayInfo[] getActiveDisplayInfos() {
+        int[] ids;
+        synchronized (activeDisplaysLock) {
+            ids = new int[activeSessions.size()];
+            int i = 0;
+            for (int id : activeSessions.keySet()) {
+                ids[i++] = id;
+            }
+        }
+        java.util.List<com.genymobile.scrcpy.display.DisplayInfo> result = new java.util.ArrayList<>(ids.length);
+        for (int id : ids) {
+            try {
+                com.genymobile.scrcpy.display.DisplayInfo info = ServiceManager.getDisplayManager().getDisplayInfo(id);
+                if (info != null) {
+                    result.add(info);
+                } else {
+                    Ln.w("VirtualDisplayRegistry: getDisplayInfo returned null for displayId=" + id);
+                }
+            } catch (Throwable t) {
+                Ln.w("VirtualDisplayRegistry: failed to query DisplayInfo for displayId=" + id, t);
+            }
+        }
+        return result.toArray(new com.genymobile.scrcpy.display.DisplayInfo[0]);
+    }
+
     public void releaseAll() {
         int[] ids;
         synchronized (activeDisplaysLock) {
@@ -244,5 +321,46 @@ public final class VirtualDisplayRegistry {
             releaseVirtualDisplay(id);
         }
         Ln.i("VirtualDisplayRegistry: all virtual displays released");
+    }
+
+    /**
+     * Freeze a display's rotation and verify the freeze took effect, retrying a
+     * few times to bridge the race where the WindowManager has not yet registered
+     * a newly-created or just-resized display (freezeRotation would silently fail
+     * in that case — WindowManager catches the exception internally).
+     *
+     * <p>This is a daemon-side workaround; it does not modify upstream
+     * {@link com.genymobile.scrcpy.wrappers.WindowManager}.
+     */
+    private void freezeRotationWithRetry(int displayId, int rotation) {
+        com.genymobile.scrcpy.wrappers.WindowManager wm = ServiceManager.getWindowManager();
+        for (int attempt = 1; attempt <= 5; attempt++) {
+            try {
+                wm.freezeRotation(displayId, rotation);
+            } catch (Throwable t) {
+                Ln.w("VirtualDisplayRegistry: freezeRotation attempt " + attempt
+                        + " threw for displayId=" + displayId, t);
+            }
+            try {
+                if (wm.isRotationFrozen(displayId)) {
+                    Ln.i("VirtualDisplayRegistry: froze rotation (ROTATION_" + rotation
+                            + ") for display id=" + displayId + " (attempt " + attempt + ")");
+                    return;
+                }
+            } catch (Throwable t) {
+                // isRotationFrozen not supported on this version — assume freeze succeeded.
+                Ln.i("VirtualDisplayRegistry: freezeRotation completed for display id=" + displayId
+                        + " (isRotationFrozen check unavailable, attempt " + attempt + ")");
+                return;
+            }
+            try {
+                Thread.sleep(100 * attempt);
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+        }
+        Ln.w("VirtualDisplayRegistry: could not confirm rotation freeze for displayId="
+                + displayId + " after 5 attempts (continuing — freeze may still apply asynchronously)");
     }
 }

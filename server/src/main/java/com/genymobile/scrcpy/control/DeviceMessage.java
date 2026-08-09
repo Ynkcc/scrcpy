@@ -1,5 +1,7 @@
 package com.genymobile.scrcpy.control;
 
+import com.genymobile.scrcpy.display.DisplayInfo;
+
 public final class DeviceMessage {
 
     public static final int TYPE_CLIPBOARD = 0;
@@ -15,6 +17,8 @@ public final class DeviceMessage {
     public int statusCode;
     public int displayId;
     public int[] displayIds;
+    // Per-display metadata for TYPE_RESPONSE_ACTIVE_DISPLAY_INFOS (102).
+    public DisplayInfo[] displayInfos;
 
     public DeviceMessage() {
     }
@@ -71,5 +75,9 @@ public final class DeviceMessage {
 
     public int[] getDisplayIds() {
         return displayIds;
+    }
+
+    public DisplayInfo[] getDisplayInfos() {
+        return displayInfos;
     }
 }

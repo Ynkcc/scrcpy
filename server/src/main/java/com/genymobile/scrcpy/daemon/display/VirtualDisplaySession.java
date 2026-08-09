@@ -91,6 +91,7 @@ public final class VirtualDisplaySession implements AutoCloseable {
             try {
                 externalSurface.release();
             } catch (Exception ignore) {
+                Ln.d("VirtualDisplaySession: failed to release externalSurface for displayId=" + displayId + ": " + ignore.getMessage());
             }
             externalSurface = null;
         }
@@ -108,6 +109,7 @@ public final class VirtualDisplaySession implements AutoCloseable {
             try {
                 readerThread.quitSafely();
             } catch (Exception ignore) {
+                Ln.d("VirtualDisplaySession: failed to quitSafely readerThread for displayId=" + displayId + ": " + ignore.getMessage());
             }
         }
 
@@ -116,6 +118,7 @@ public final class VirtualDisplaySession implements AutoCloseable {
                 try {
                     virtualDisplay.setSurface(null);
                 } catch (Exception ignore) {
+                    Ln.d("VirtualDisplaySession: failed to clear surface before release for displayId=" + displayId + ": " + ignore.getMessage());
                 }
                 virtualDisplay.release();
             } catch (Exception e) {

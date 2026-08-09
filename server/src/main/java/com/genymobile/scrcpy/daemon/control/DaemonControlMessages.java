@@ -15,6 +15,19 @@ public final class DaemonControlMessages {
     public static final int TYPE_START_VIDEO_STREAM = 209;
     public static final int TYPE_STOP_VIDEO_STREAM = 210;
 
+    // Rotation control (per-display). For TYPE_FREEZE_ROTATION the requested
+    // rotation (0-3) is carried in ControlMessage.flags to avoid adding a new
+    // carrier field to the upstream ControlMessage class.
+    public static final int TYPE_GET_ROTATION = 211;
+    public static final int TYPE_FREEZE_ROTATION = 212;
+    public static final int TYPE_THAW_ROTATION = 213;
+    public static final int TYPE_IS_ROTATION_FROZEN = 214;
+
+    // Enriched active-display query: returns per-display {id,w,h,dpi,rotation}
+    // via DaemonDeviceMessages.TYPE_RESPONSE_ACTIVE_DISPLAY_INFOS (102).
+    // The legacy TYPE_GET_ACTIVE_DISPLAY_IDS (205) / 101 path is kept unchanged.
+    public static final int TYPE_GET_ACTIVE_DISPLAY_INFOS = 215;
+
     private DaemonControlMessages() {
     }
 
@@ -75,5 +88,35 @@ public final class DaemonControlMessages {
         ControlMessage msg = ControlMessage.createEmpty(TYPE_STOP_VIDEO_STREAM);
         msg.sequence = sequence;
         return msg;
+    }
+
+    public static ControlMessage createGetRotation(int displayId) {
+        ControlMessage msg = ControlMessage.createEmpty(TYPE_GET_ROTATION);
+        msg.displayId = displayId;
+        return msg;
+    }
+
+    public static ControlMessage createFreezeRotation(int displayId, int rotation) {
+        ControlMessage msg = ControlMessage.createEmpty(TYPE_FREEZE_ROTATION);
+        msg.displayId = displayId;
+        // rotation (0-3) carried in flags (see type comment).
+        msg.flags = rotation;
+        return msg;
+    }
+
+    public static ControlMessage createThawRotation(int displayId) {
+        ControlMessage msg = ControlMessage.createEmpty(TYPE_THAW_ROTATION);
+        msg.displayId = displayId;
+        return msg;
+    }
+
+    public static ControlMessage createIsRotationFrozen(int displayId) {
+        ControlMessage msg = ControlMessage.createEmpty(TYPE_IS_ROTATION_FROZEN);
+        msg.displayId = displayId;
+        return msg;
+    }
+
+    public static ControlMessage createGetActiveDisplayInfos() {
+        return ControlMessage.createEmpty(TYPE_GET_ACTIVE_DISPLAY_INFOS);
     }
 }

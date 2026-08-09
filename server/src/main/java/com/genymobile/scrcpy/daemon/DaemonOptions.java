@@ -1,5 +1,7 @@
 package com.genymobile.scrcpy.daemon;
 
+import com.genymobile.scrcpy.util.Ln;
+
 public class DaemonOptions {
 
     private int port = -1;
@@ -32,8 +34,11 @@ public class DaemonOptions {
                         int port = Integer.parseInt(value);
                         if (port >= 1024 && port <= 65535) {
                             opts.port = port;
+                        } else {
+                            Ln.w("daemon_port out of range [1024,65535], ignored: " + value);
                         }
-                    } catch (NumberFormatException ignored) {
+                    } catch (NumberFormatException e) {
+                        Ln.w("daemon_port not a valid integer, ignored: " + value);
                     }
                     break;
                 case "daemon_bind_address":

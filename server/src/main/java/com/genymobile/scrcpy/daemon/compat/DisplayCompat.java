@@ -139,6 +139,7 @@ public final class DisplayCompat {
                     targets.add(mDm);
                 }
             } catch (Throwable ignored) {
+                Ln.d("DisplayCompat: mDm field not present on " + dmg.getClass().getName() + " (probing)");
             }
 
             for (Object target : targets) {
@@ -158,6 +159,7 @@ public final class DisplayCompat {
                                 }
                                 return true;
                             } catch (Throwable ignored) {
+                                Ln.d("DisplayCompat: release method " + method.getName() + " not applicable on " + target.getClass().getName() + " (probing)");
                             }
                         }
                     }

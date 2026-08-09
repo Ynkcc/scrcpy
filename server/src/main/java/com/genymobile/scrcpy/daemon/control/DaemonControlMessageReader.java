@@ -46,6 +46,41 @@ public final class DaemonControlMessageReader {
                 long sequence = dis.readLong();
                 return DaemonControlMessages.createStopVideoStream(sequence);
             }
+            case DaemonControlMessages.TYPE_GET_ROTATION: {
+                long sequence = dis.readLong();
+                int displayId = dis.readInt();
+                ControlMessage msg = DaemonControlMessages.createGetRotation(displayId);
+                msg.sequence = sequence;
+                return msg;
+            }
+            case DaemonControlMessages.TYPE_FREEZE_ROTATION: {
+                long sequence = dis.readLong();
+                int displayId = dis.readInt();
+                int rotation = dis.readInt();
+                ControlMessage msg = DaemonControlMessages.createFreezeRotation(displayId, rotation);
+                msg.sequence = sequence;
+                return msg;
+            }
+            case DaemonControlMessages.TYPE_THAW_ROTATION: {
+                long sequence = dis.readLong();
+                int displayId = dis.readInt();
+                ControlMessage msg = DaemonControlMessages.createThawRotation(displayId);
+                msg.sequence = sequence;
+                return msg;
+            }
+            case DaemonControlMessages.TYPE_IS_ROTATION_FROZEN: {
+                long sequence = dis.readLong();
+                int displayId = dis.readInt();
+                ControlMessage msg = DaemonControlMessages.createIsRotationFrozen(displayId);
+                msg.sequence = sequence;
+                return msg;
+            }
+            case DaemonControlMessages.TYPE_GET_ACTIVE_DISPLAY_INFOS: {
+                long sequence = dis.readLong();
+                ControlMessage msg = DaemonControlMessages.createGetActiveDisplayInfos();
+                msg.sequence = sequence;
+                return msg;
+            }
             default:
                 return null;
         }

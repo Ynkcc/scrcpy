@@ -9,9 +9,11 @@ import com.genymobile.scrcpy.device.Device;
 import com.genymobile.scrcpy.daemon.display.VirtualDisplayRegistry;
 import com.genymobile.scrcpy.daemon.display.DisplaySurfaceBroker;
 import com.genymobile.scrcpy.daemon.display.ActivityLauncher;
+import com.genymobile.scrcpy.daemon.display.RotationController;
 import com.genymobile.scrcpy.daemon.DaemonExitCoordinator;
 import com.genymobile.scrcpy.daemon.VideoController;
 import com.genymobile.scrcpy.util.Ln;
+import com.genymobile.scrcpy.video.CaptureControl;
 import com.genymobile.scrcpy.video.ScreenCapture;
 import com.genymobile.scrcpy.video.SurfaceCapture;
 
@@ -45,6 +47,7 @@ public final class DaemonCommandHandler implements ControlMessageExtension {
 
     private final VirtualDisplayRegistry registry;
     private final DaemonExitCoordinator exitCoordinator;
+    private final RotationController rotationController;
 
     private final ExecutorService interactiveExecutor = Executors.newSingleThreadExecutor();
     private final ExecutorService lifecycleExecutor = Executors.newFixedThreadPool(2);
@@ -57,6 +60,7 @@ public final class DaemonCommandHandler implements ControlMessageExtension {
         this.sender = controller.getDeviceMessageSender();
         this.registry = registry;
         this.exitCoordinator = exitCoordinator;
+        this.rotationController = new RotationController(registry);
         this.context = new CommandContext(sender, controller, videoController);
         initRegistry();
     }
@@ -89,12 +93,34 @@ public final class DaemonCommandHandler implements ControlMessageExtension {
         });
 
         register(DaemonControlMessages.TYPE_RESIZE_VIRTUAL_DISPLAY, ExecutionPolicy.SLOW, (msg, ctx) -> {
+            int displayId = msg.getDisplayId();
             boolean ok = registry.resizeVirtualDisplay(
-                    msg.getDisplayId(), msg.getWidth(), msg.getHeight(), msg.getDpi());
+                    displayId, msg.getWidth(), msg.getHeight(), msg.getDpi());
             if (!ok) {
                 throw new RuntimeException("FAILED");
             }
-            sendSuccessResponse(msg, msg.getDisplayId(), "OK");
+            // After a successful resize, explicitly kick the running video encoder
+            // pipeline so it picks up the new dimensions. Without this, the
+            // encoder may keep producing frames at the old resolution until the
+            // next DisplayMonitor event fires (which can be racy on some
+            // devices), resulting in a stretched/corrupted/blank picture until
+            // the pipeline is torn down.
+            if (ctx.getController() != null) {
+                SurfaceCapture sc = ctx.getController().getSurfaceCapture();
+                if (sc instanceof ScreenCapture) {
+                    ScreenCapture screenCapture = (ScreenCapture) sc;
+                    int runningDisplayId = screenCapture.getDisplayId();
+                    CaptureControl cc = screenCapture.getCaptureControl();
+                    if (runningDisplayId == displayId && cc != null) {
+                        Ln.i("DaemonCommandHandler: resize displayId=" + displayId
+                                + " — requesting encoder pipeline reset for new size "
+                                + msg.getWidth() + "x" + msg.getHeight());
+                        cc.reset(CaptureControl.RESET_REASON_CLIENT_RESIZED
+                                | CaptureControl.RESET_REASON_DISPLAY_PROPERTIES_CHANGED);
+                    }
+                }
+            }
+            sendSuccessResponse(msg, displayId, "OK");
         });
 
         register(DaemonControlMessages.TYPE_START_ACTIVITY, ExecutionPolicy.SLOW, (msg, ctx) -> {
@@ -177,7 +203,9 @@ public final class DaemonCommandHandler implements ControlMessageExtension {
             new Thread(() -> {
                 try {
                     Thread.sleep(100);
-                } catch (InterruptedException ignored) {
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    Ln.d("handleExitDaemon: delay interrupted, proceeding to exit");
                 }
                 exitCoordinator.requestExit();
                 close();
@@ -209,6 +237,35 @@ public final class DaemonCommandHandler implements ControlMessageExtension {
                 throw new RuntimeException("FAILED");
             }
             sendSuccessResponse(msg, -1, "OK");
+        });
+
+        register(DaemonControlMessages.TYPE_GET_ROTATION, ExecutionPolicy.FAST, (msg, ctx) -> {
+            int rotation = rotationController.getRotation(msg.getDisplayId());
+            sendSuccessResponse(msg, msg.getDisplayId(), String.valueOf(rotation));
+        });
+
+        register(DaemonControlMessages.TYPE_FREEZE_ROTATION, ExecutionPolicy.FAST, (msg, ctx) -> {
+            // rotation (0-3) carried in msg.flags (see DaemonControlMessages).
+            rotationController.freeze(msg.getDisplayId(), msg.getFlags());
+            sendSuccessResponse(msg, msg.getDisplayId(), "OK");
+        });
+
+        register(DaemonControlMessages.TYPE_THAW_ROTATION, ExecutionPolicy.FAST, (msg, ctx) -> {
+            rotationController.thaw(msg.getDisplayId());
+            sendSuccessResponse(msg, msg.getDisplayId(), "OK");
+        });
+
+        register(DaemonControlMessages.TYPE_IS_ROTATION_FROZEN, ExecutionPolicy.FAST, (msg, ctx) -> {
+            int frozen = rotationController.isFrozen(msg.getDisplayId());
+            sendSuccessResponse(msg, msg.getDisplayId(), String.valueOf(frozen));
+        });
+
+        register(DaemonControlMessages.TYPE_GET_ACTIVE_DISPLAY_INFOS, ExecutionPolicy.FAST, (msg, ctx) -> {
+            com.genymobile.scrcpy.display.DisplayInfo[] infos = registry.getActiveDisplayInfos();
+            if (ctx.getSender() != null) {
+                DeviceMessage response = DaemonDeviceMessages.createActiveDisplayInfosResponse(msg.getSequence(), infos);
+                ctx.getSender().send(response);
+            }
         });
     }
 
