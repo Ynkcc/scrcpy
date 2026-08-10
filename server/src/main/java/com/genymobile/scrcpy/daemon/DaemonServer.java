@@ -7,6 +7,7 @@ import com.genymobile.scrcpy.daemon.display.VirtualDisplayRegistry;
 import com.genymobile.scrcpy.daemon.display.DisplaySurfaceBroker;
 import com.genymobile.scrcpy.daemon.net.TcpDesktopConnection;
 import com.genymobile.scrcpy.daemon.net.TcpServerSocketListener;
+import com.genymobile.scrcpy.daemon.video.FrameBroadcasterRegistry;
 import com.genymobile.scrcpy.util.Ln;
 
 import java.io.IOException;
@@ -34,6 +35,7 @@ public final class DaemonServer {
     private final VirtualDisplayRegistry registry;
     private final DisplaySurfaceBroker surfaceBroker;
     private final DaemonExitCoordinator exitCoordinator;
+    private final FrameBroadcasterRegistry broadcasterRegistry;
 
     private ExecutorService acceptExecutor;
     private ExecutorService clientExecutor;
@@ -45,6 +47,7 @@ public final class DaemonServer {
         this.registry = new VirtualDisplayRegistry();
         this.surfaceBroker = new DisplaySurfaceBroker(registry);
         this.exitCoordinator = new DaemonExitCoordinator(this);
+        this.broadcasterRegistry = new FrameBroadcasterRegistry(surfaceBroker);
     }
 
     public void run() throws IOException {
@@ -142,7 +145,7 @@ public final class DaemonServer {
 
         ClientSession session;
         try {
-            session = new ClientSession(socket, sessionId, options, baseArgs, registry, surfaceBroker, exitCoordinator, this);
+            session = new ClientSession(socket, sessionId, options, baseArgs, registry, surfaceBroker, exitCoordinator, this, broadcasterRegistry);
         } catch (IOException e) {
             Ln.w("Failed to create client session: " + e.getMessage());
             try { socket.close(); } catch (IOException closeEx) {
@@ -169,13 +172,14 @@ public final class DaemonServer {
     private void handleControlSocket(Socket socket) {
         try {
             int sessionId = TcpDesktopConnection.readSessionId(socket);
+            int displayId = TcpDesktopConnection.readDisplayId(socket);
             ClientSession session = sessions.get(sessionId);
             if (session == null) {
                 Ln.w("Control socket for unknown session " + sessionId);
                 socket.close();
                 return;
             }
-            session.onControlSocket(socket);
+            session.onControlSocket(displayId, socket);
         } catch (IOException e) {
             Ln.w("Failed to handle control socket: " + e.getMessage());
             try { socket.close(); } catch (IOException closeEx) {
@@ -187,13 +191,14 @@ public final class DaemonServer {
     private void handleVideoSocket(Socket socket) {
         try {
             int sessionId = TcpDesktopConnection.readSessionId(socket);
+            int displayId = TcpDesktopConnection.readDisplayId(socket);
             ClientSession session = sessions.get(sessionId);
             if (session == null) {
                 Ln.w("Video socket for unknown session " + sessionId);
                 socket.close();
                 return;
             }
-            session.onVideoSocket(socket);
+            session.onVideoSocket(displayId, socket);
         } catch (IOException e) {
             Ln.w("Failed to handle video socket: " + e.getMessage());
             try { socket.close(); } catch (IOException closeEx) {
@@ -205,13 +210,14 @@ public final class DaemonServer {
     private void handleAudioSocket(Socket socket) {
         try {
             int sessionId = TcpDesktopConnection.readSessionId(socket);
+            int displayId = TcpDesktopConnection.readDisplayId(socket);
             ClientSession session = sessions.get(sessionId);
             if (session == null) {
                 Ln.w("Audio socket for unknown session " + sessionId);
                 socket.close();
                 return;
             }
-            session.onAudioSocket(socket);
+            session.onAudioSocket(displayId, socket);
         } catch (IOException e) {
             Ln.w("Failed to handle audio socket: " + e.getMessage());
             try { socket.close(); } catch (IOException closeEx) {
@@ -227,6 +233,12 @@ public final class DaemonServer {
             session.shutdown();
         }
         sessions.clear();
+
+        if (broadcasterRegistry != null) {
+            // Stop all encoders BEFORE destroying the virtual displays: a
+            // running encoder's capture holds a reference to the VD surface.
+            broadcasterRegistry.releaseAll();
+        }
 
         if (registry != null) {
             registry.releaseAll();

@@ -232,16 +232,32 @@ public class ScreenCapture extends SurfaceCapture {
             }
 
             if (vdListener != null) {
+                int virtualDisplayId;
                 PositionMapper positionMapper;
-                if (transform != null) {
-                    Size inputSize = displayInfo != null ? displayInfo.getSize()
+                // Match the upstream start() logic exactly (see lines 191-201 above):
+                //  - virtualDisplay != null (daemonVD is set) AND displayId != 0 → use VD's real id + inputSize
+                //  - displayId == 0 → main display path
+                if (displayId == 0) {
+                    Size deviceSize = displayInfo != null ? displayInfo.getSize()
                             : new Size(daemonVD.getDisplay().getWidth(), daemonVD.getDisplay().getHeight());
-                    positionMapper = PositionMapper.create(videoSize, transform, inputSize);
+                    positionMapper = PositionMapper.create(videoSize, transform, deviceSize);
+                    virtualDisplayId = displayId;
                 } else {
-                    Size displaySize = new Size(daemonVD.getDisplay().getWidth(), daemonVD.getDisplay().getHeight());
-                    positionMapper = PositionMapper.create(videoSize, transform, displaySize);
+                    // Positions are relative to the virtual display content area:
+                    // use the encoded target size (inputSize) when a filter is applied,
+                    // otherwise the virtual display's own logical size (displaySize).
+                    Size inputSize;
+                    if (transform != null) {
+                        inputSize = displayInfo != null ? displayInfo.getSize()
+                                : new Size(daemonVD.getDisplay().getWidth(), daemonVD.getDisplay().getHeight());
+                    } else {
+                        inputSize = videoSize;
+                    }
+                    positionMapper = PositionMapper.create(videoSize, transform, inputSize);
+                    virtualDisplayId = daemonVD.getDisplay().getDisplayId();
                 }
-                vdListener.onNewVirtualDisplay(displayId, positionMapper);
+                Ln.i("ScreenCapture: bindDaemonVirtualDisplay vdListener id=" + virtualDisplayId + " (requested=" + displayId + ")");
+                vdListener.onNewVirtualDisplay(virtualDisplayId, positionMapper);
             }
         } catch (Exception e) {
             Ln.e("ScreenCapture: failed to bind surface to daemon virtual display", e);

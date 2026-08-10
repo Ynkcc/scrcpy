@@ -42,12 +42,14 @@ public class DisplayMonitor {
     }
 
     public void start(int displayId, Listener listener) {
-        // Once started, the listener and the displayId must never change
         assert listener != null;
         this.listener = listener;
 
-        assert this.displayId == Device.DISPLAY_ID_NONE;
-        this.displayId = displayId;
+        // Only set displayId from start() if it was not pre-set via setDisplayId()
+        // (daemon mode may call setDisplayId() before init/start to switch sources)
+        if (this.displayId == Device.DISPLAY_ID_NONE) {
+            this.displayId = displayId;
+        }
 
         if (USE_DEFAULT_METHOD) {
             handlerThread = new HandlerThread("DisplayListener");
@@ -58,7 +60,9 @@ public class DisplayMonitor {
                     Ln.v("DisplayMonitor: onDisplayChanged(" + eventDisplayId + ")");
                 }
 
-                if (eventDisplayId == displayId) {
+                // Read this.displayId (not the start() parameter) so
+                // setDisplayId() switches take effect in the listener.
+                if (eventDisplayId == DisplayMonitor.this.displayId) {
                     try {
                         checkDisplayPropertiesChanged();
                     } catch (Throwable e) {
@@ -75,7 +79,7 @@ public class DisplayMonitor {
                         Ln.v("DisplayMonitor: onDisplayConfigurationChanged(" + eventDisplayId + ")");
                     }
 
-                    if (eventDisplayId == displayId) {
+                    if (eventDisplayId == DisplayMonitor.this.displayId) {
                         try {
                             checkDisplayPropertiesChanged();
                         } catch (Throwable e) {

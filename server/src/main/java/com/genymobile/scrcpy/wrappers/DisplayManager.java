@@ -48,6 +48,8 @@ public final class DisplayManager {
     private final Object manager; // instance of hidden class android.hardware.display.DisplayManagerGlobal
     private Method getDisplayInfoMethod;
     private Method createVirtualDisplayMethod;
+    private Method createVirtualDisplayGlobalMethod;
+    private Constructor<?> displayManagerCtor;
     private Method requestDisplayPowerMethod;
 
     static DisplayManager create() {
@@ -174,10 +176,85 @@ public final class DisplayManager {
     }
 
     public VirtualDisplay createNewVirtualDisplay(String name, int width, int height, int dpi, Surface surface, int flags) throws Exception {
-        Constructor<android.hardware.display.DisplayManager> ctor = android.hardware.display.DisplayManager.class.getDeclaredConstructor(
-                Context.class);
-        ctor.setAccessible(true);
-        android.hardware.display.DisplayManager dm = ctor.newInstance(FakeContext.get());
+        // Prefer DisplayManagerGlobal.createVirtualDisplay over constructing a new
+        // DisplayManager(Context): the DisplayManagerGlobal singleton is already
+        // fully initialized, and its createVirtualDisplay method has been stable
+        // across Android versions (with a few overloads). The previous approach of
+        // reflectively constructing DisplayManager with FakeContext is brittle —
+        // FakeContext wraps Workarounds.getSystemContext() and on many Android
+        // builds the shell/root UID cannot satisfy DisplayManager's internal
+        // invariants, causing InvocationTargetException inside
+        // dm.createVirtualDisplay (e.g. "Invalid display manager service handle").
+        if (createVirtualDisplayGlobalMethod == null) {
+            // Probe several common overload signatures of DisplayManagerGlobal.
+            // The full signature on recent Android is:
+            //   createVirtualDisplay(String pkgName, String name, int w, int h,
+            //       int dpi, Surface surface, int flags, VirtualDisplay.Callback cb,
+            //       Handler handler, String uniqueId)
+            // Older versions have fewer params.
+            Class<?>[] pkg = {String.class, String.class, int.class, int.class, int.class, Surface.class, int.class};
+            Class<?>[] cb = {String.class, String.class, int.class, int.class, int.class, Surface.class, int.class,
+                    android.hardware.display.VirtualDisplay.Callback.class, android.os.Handler.class};
+            Class<?>[] full = {String.class, String.class, int.class, int.class, int.class, Surface.class, int.class,
+                    android.hardware.display.VirtualDisplay.Callback.class, android.os.Handler.class, String.class};
+            Class<?>[] noPkg = {String.class, int.class, int.class, int.class, Surface.class, int.class};
+            Class<?>[][] candidates = {full, cb, pkg, noPkg};
+            Method chosen = null;
+            for (Class<?>[] c : candidates) {
+                try {
+                    chosen = manager.getClass().getDeclaredMethod("createVirtualDisplay", c);
+                    chosen.setAccessible(true);
+                    break;
+                } catch (NoSuchMethodException ignored) {
+                    // try next
+                }
+            }
+            createVirtualDisplayGlobalMethod = chosen;
+        }
+
+        if (createVirtualDisplayGlobalMethod != null) {
+            Method m = createVirtualDisplayGlobalMethod;
+            Class<?>[] ptypes = m.getParameterTypes();
+            Object[] args = new Object[ptypes.length];
+            int idx = 0;
+            if (ptypes[idx] == String.class && ptypes.length > 1 && ptypes[idx + 1] == String.class) {
+                // first param is packageName
+                args[idx++] = FakeContext.PACKAGE_NAME;
+            }
+            args[idx++] = name;
+            args[idx++] = width;
+            args[idx++] = height;
+            args[idx++] = dpi;
+            args[idx++] = surface;
+            if (idx < ptypes.length && ptypes[idx] == int.class) {
+                args[idx++] = flags;
+            }
+            // Callback + Handler + uniqueId: leave null, they are optional
+            while (idx < args.length) {
+                args[idx++] = null;
+            }
+            try {
+                VirtualDisplay vd = (VirtualDisplay) m.invoke(manager, args);
+                if (vd != null) {
+                    Ln.i("DisplayManager: created VD via Global (method arity=" + ptypes.length + ")");
+                    return vd;
+                }
+            } catch (java.lang.reflect.InvocationTargetException ite) {
+                Throwable cause = ite.getCause() != null ? ite.getCause() : ite;
+                Ln.w("DisplayManager: Global.createVirtualDisplay failed, will fallback: " + cause);
+                // Fall through to fallback path below
+            }
+        }
+
+        // Fallback: construct DisplayManager via Context (old path).
+        // Cache the constructor to avoid repeated reflective lookup.
+        if (displayManagerCtor == null) {
+            displayManagerCtor = android.hardware.display.DisplayManager.class.getDeclaredConstructor(Context.class);
+            displayManagerCtor.setAccessible(true);
+        }
+        android.hardware.display.DisplayManager dm =
+                (android.hardware.display.DisplayManager) displayManagerCtor.newInstance(FakeContext.get());
+        Ln.w("DisplayManager: falling back to DisplayManager(Context) path");
         return dm.createVirtualDisplay(name, width, height, dpi, surface, flags);
     }
 

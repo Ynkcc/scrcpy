@@ -236,25 +236,38 @@ public final class Server {
             }
         });
 
-        dropRootPrivileges();
-
-        prepareMainLooper();
-
+        // Daemon mode MUST dispatch BEFORE dropRootPrivileges():
+        // daemon needs root for HiddenApiBypass, VirtualDisplay creation,
+        // and system service injection.
         DaemonOptions daemonOptions = DaemonOptions.parse(args);
-        String[] scrubbed = daemonOptions.isDaemonMode() ? DaemonArgs.strip(args) : null;
-        Options options = Options.parse(scrubbed != null ? scrubbed : args);
-
-        Ln.disableSystemStreams();
-        Ln.initLogLevel(options.getLogLevel());
-
-        Ln.i("Device: [" + Build.MANUFACTURER + "] " + Build.BRAND + " " + Build.MODEL + " (Android " + Build.VERSION.RELEASE + ")");
-
         if (daemonOptions.isDaemonMode()) {
+            String[] scrubbed = DaemonArgs.strip(args);
+            Options options = Options.parse(scrubbed);
+
+            prepareMainLooper();
+
+            Ln.disableSystemStreams();
+            Ln.initLogLevel(options.getLogLevel());
+
+            Ln.i("Device: [" + Build.MANUFACTURER + "] " + Build.BRAND + " " + Build.MODEL + " (Android " + Build.VERSION.RELEASE + ")");
+            Ln.i("Starting in daemon mode (root preserved)");
+
             // DaemonServer owns its TCP server socket lifecycle (init on run,
             // close on shutdown) so this entry point only dispatches.
             new DaemonServer(options, daemonOptions, scrubbed).run();
             return;
         }
+
+        dropRootPrivileges();
+
+        prepareMainLooper();
+
+        Options options = Options.parse(args);
+
+        Ln.disableSystemStreams();
+        Ln.initLogLevel(options.getLogLevel());
+
+        Ln.i("Device: [" + Build.MANUFACTURER + "] " + Build.BRAND + " " + Build.MODEL + " (Android " + Build.VERSION.RELEASE + ")");
 
         if (options.getList()) {
             if (options.getCleanup()) {

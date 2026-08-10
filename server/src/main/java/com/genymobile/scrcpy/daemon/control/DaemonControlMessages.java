@@ -9,11 +9,7 @@ public final class DaemonControlMessages {
     public static final int TYPE_RESIZE_VIRTUAL_DISPLAY = 203;
     public static final int TYPE_START_ACTIVITY = 204;
     public static final int TYPE_GET_ACTIVE_DISPLAY_IDS = 205;
-    public static final int TYPE_INJECT_INPUT_EVENT_WITH_DISPLAY_ID = 206;
-    public static final int TYPE_SWITCH_DISPLAY = 207;
     public static final int TYPE_EXIT_DAEMON = 208;
-    public static final int TYPE_START_VIDEO_STREAM = 209;
-    public static final int TYPE_STOP_VIDEO_STREAM = 210;
 
     // Rotation control (per-display). For TYPE_FREEZE_ROTATION the requested
     // rotation (0-3) is carried in DaemonControlMessage.flags.
@@ -26,6 +22,15 @@ public final class DaemonControlMessages {
     // via DaemonDeviceMessages.TYPE_RESPONSE_ACTIVE_DISPLAY_INFOS (102).
     // The legacy TYPE_GET_ACTIVE_DISPLAY_IDS (205) / 101 path is kept unchanged.
     public static final int TYPE_GET_ACTIVE_DISPLAY_INFOS = 215;
+
+    // Negotiation-phase session configuration. The client MUST send this on the
+    // ROLE_NEGOTIATION socket (after receiving sessionId + device meta) before
+    // opening any ROLE_VIDEO / ROLE_AUDIO / ROLE_CONTROL socket. It carries
+    // per-session scrcpy option overrides (newline-separated key=value) and a
+    // bitmask of the roles the client intends to open. The server rebuilds the
+    // per-session Options from the overrides and only then allows role sockets
+    // to bind — enforcing "negotiate first, open more sockets after".
+    public static final int TYPE_CONFIGURE_SESSION = 216;
 
     private DaemonControlMessages() {
     }
@@ -82,35 +87,6 @@ public final class DaemonControlMessages {
         return envelope(TYPE_GET_ACTIVE_DISPLAY_IDS, dto);
     }
 
-    public static ControlMessage createInjectInputEventWithDisplayId(long sequence, int displayId, boolean isKeyEvent, byte[] parcelBytes) {
-        DaemonControlMessage dto = new DaemonControlMessage();
-        dto.setSequence(sequence);
-        dto.setDisplayId(displayId);
-        dto.setKeyEvent(isKeyEvent);
-        dto.setData(parcelBytes);
-        return envelope(TYPE_INJECT_INPUT_EVENT_WITH_DISPLAY_ID, dto);
-    }
-
-    public static ControlMessage createSwitchDisplay(long sequence, int displayId) {
-        DaemonControlMessage dto = new DaemonControlMessage();
-        dto.setSequence(sequence);
-        dto.setDisplayId(displayId);
-        return envelope(TYPE_SWITCH_DISPLAY, dto);
-    }
-
-    public static ControlMessage createStartVideoStream(long sequence, int displayId) {
-        DaemonControlMessage dto = new DaemonControlMessage();
-        dto.setSequence(sequence);
-        dto.setDisplayId(displayId);
-        return envelope(TYPE_START_VIDEO_STREAM, dto);
-    }
-
-    public static ControlMessage createStopVideoStream(long sequence) {
-        DaemonControlMessage dto = new DaemonControlMessage();
-        dto.setSequence(sequence);
-        return envelope(TYPE_STOP_VIDEO_STREAM, dto);
-    }
-
     public static ControlMessage createGetRotation(long sequence, int displayId) {
         DaemonControlMessage dto = new DaemonControlMessage();
         dto.setSequence(sequence);
@@ -150,5 +126,33 @@ public final class DaemonControlMessages {
         DaemonControlMessage dto = new DaemonControlMessage();
         dto.setSequence(sequence);
         return envelope(TYPE_EXIT_DAEMON, dto);
+    }
+
+    public static ControlMessage createConfigureSession(long sequence, String optionsKv, int rolesMask) {
+        DaemonControlMessage dto = new DaemonControlMessage();
+        dto.setSequence(sequence);
+        dto.setOptionsKv(optionsKv != null ? optionsKv : "");
+        dto.setRolesMask(rolesMask);
+        return envelope(TYPE_CONFIGURE_SESSION, dto);
+    }
+
+    /**
+     * Multi-role multi-display variant of {@link #createConfigureSession(long, String, int)}.
+     *
+     * <p>Declares the exact set of (role, displayId) sockets the client
+     * intends to open. See {@link DaemonControlMessage.RoleEntry} for
+     * semantics. When non-empty, {@code rolesEntries} takes precedence over
+     * the legacy 3-bit mask; the mask is preserved in the payload so older
+     * readers that only inspect the mask still see which role *types* are
+     * intended.
+     */
+    public static ControlMessage createConfigureSession(long sequence, String optionsKv, int rolesMask,
+                                                        java.util.List<DaemonControlMessage.RoleEntry> rolesEntries) {
+        DaemonControlMessage dto = new DaemonControlMessage();
+        dto.setSequence(sequence);
+        dto.setOptionsKv(optionsKv != null ? optionsKv : "");
+        dto.setRolesMask(rolesMask);
+        dto.setRolesEntries(rolesEntries);
+        return envelope(TYPE_CONFIGURE_SESSION, dto);
     }
 }

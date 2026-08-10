@@ -37,7 +37,7 @@ public class SurfaceEncoder implements AsyncProcessor {
     private static final int MAX_CONSECUTIVE_ERRORS = 3;
 
     private final SurfaceCapture capture;
-    private final Streamer streamer;
+    private final FrameSink sink;
     private final String encoderName;
     private final List<CodecOption> codecOptions;
     private final int videoBitRate;
@@ -57,9 +57,27 @@ public class SurfaceEncoder implements AsyncProcessor {
 
     private VideoConstraints videoConstraints;
 
+    /**
+     * Legacy constructor targeting a single socket via {@link Streamer}.
+     *
+     * <p>Retained for the non-daemon {@code Server.java} path. Delegates to
+     * {@link #SurfaceEncoder(SurfaceCapture, FrameSink, Options)} since
+     * {@code Streamer} now implements {@link FrameSink}.
+     */
     public SurfaceEncoder(SurfaceCapture capture, Streamer streamer, Options options) {
+        this(capture, (FrameSink) streamer, options);
+    }
+
+    /**
+     * Construct an encoder that writes encoded packets to a {@link FrameSink}.
+     *
+     * <p>The sink may be a {@link Streamer} (single socket) or a daemon
+     * {@code FrameBroadcaster} (multi-client fan-out). The encoder is agnostic
+     * to which.
+     */
+    public SurfaceEncoder(SurfaceCapture capture, FrameSink sink, Options options) {
         this.capture = capture;
-        this.streamer = streamer;
+        this.sink = sink;
         this.videoBitRate = options.getVideoBitRate();
         this.maxSize = options.getMaxSize();
         this.maxFps = options.getMaxFps();
@@ -70,8 +88,19 @@ public class SurfaceEncoder implements AsyncProcessor {
         this.ignoreVideoEncoderConstraints = options.getIgnoreVideoEncoderConstraints();
     }
 
+    /**
+     * Request an instantaneous sync frame (IDR) from the running encoder.
+     *
+     * <p>Used by the daemon broadcaster when a new subscriber joins so the new
+     * client receives a decodable key frame after the cached CSD (refs/13 §4C).
+     * No-op if encoding has not started or the API does not support it.
+     */
+    public void requestSyncFrame() {
+        captureControl.requestSyncFrame();
+    }
+
     private void streamCapture() throws IOException, ConfigurationException {
-        Codec codec = streamer.getCodec();
+        Codec codec = sink.getCodec();
         MediaCodec mediaCodec = createMediaCodec(codec, encoderName);
         MediaFormat format = createFormat(codec.getMimeType(), videoBitRate, maxFps, codecOptions);
 
@@ -99,7 +128,7 @@ public class SurfaceEncoder implements AsyncProcessor {
         try {
             boolean alive;
 
-            streamer.writeVideoHeader();
+            sink.writeVideoHeader();
 
             int retainedResetReasons = 0;
 
@@ -143,10 +172,10 @@ public class SurfaceEncoder implements AsyncProcessor {
                             // The reset is due to a resize initiated by the client
                             boolean isClientResize = (resetReasons & CaptureControl.RESET_REASON_CLIENT_RESIZED) != 0
                                     && (resetReasons & CaptureControl.RESET_REASON_DISPLAY_PROPERTIES_CHANGED) == 0;
-                            streamer.writeSessionMeta(size.getWidth(), size.getHeight(), isClientResize);
+                            sink.writeSessionMeta(size.getWidth(), size.getHeight(), isClientResize);
 
                             // If a reset is requested during encode(), it will interrupt the encoding by an EOS
-                            encode(mediaCodec, streamer);
+                            encode(mediaCodec, sink);
                         }
 
                         // The capture might have been closed internally (for example if the camera is disconnected)
@@ -249,7 +278,7 @@ public class SurfaceEncoder implements AsyncProcessor {
         return 0;
     }
 
-    private void encode(MediaCodec codec, Streamer streamer) throws IOException {
+    private void encode(MediaCodec codec, FrameSink sink) throws IOException {
         MediaCodec.BufferInfo bufferInfo = new MediaCodec.BufferInfo();
 
         boolean eos;
@@ -267,7 +296,10 @@ public class SurfaceEncoder implements AsyncProcessor {
                     }
 
                     ByteBuffer codecBuffer = codec.getOutputBuffer(outputBufferId);
-                    streamer.writePacket(codecBuffer, bufferInfo);
+                    long pts = bufferInfo.presentationTimeUs;
+                    boolean config = (bufferInfo.flags & MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0;
+                    boolean keyFrame = (bufferInfo.flags & MediaCodec.BUFFER_FLAG_KEY_FRAME) != 0;
+                    sink.writePacket(codecBuffer, pts, config, keyFrame);
                 }
             } finally {
                 if (outputBufferId >= 0) {

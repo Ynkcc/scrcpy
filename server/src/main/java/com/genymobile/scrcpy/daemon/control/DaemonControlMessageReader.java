@@ -23,16 +23,8 @@ public final class DaemonControlMessageReader {
                 return parseStartActivityWithDisplay(dis);
             case DaemonControlMessages.TYPE_GET_ACTIVE_DISPLAY_IDS:
                 return DaemonControlMessages.createGetActiveDisplayIds(dis.readLong());
-            case DaemonControlMessages.TYPE_INJECT_INPUT_EVENT_WITH_DISPLAY_ID:
-                return parseInjectInputEventWithDisplayId(dis);
-            case DaemonControlMessages.TYPE_SWITCH_DISPLAY:
-                return parseSwitchDisplay(dis);
             case DaemonControlMessages.TYPE_EXIT_DAEMON:
                 return DaemonControlMessages.createExitDaemon(dis.readLong());
-            case DaemonControlMessages.TYPE_START_VIDEO_STREAM:
-                return DaemonControlMessages.createStartVideoStream(dis.readLong(), dis.readInt());
-            case DaemonControlMessages.TYPE_STOP_VIDEO_STREAM:
-                return DaemonControlMessages.createStopVideoStream(dis.readLong());
             case DaemonControlMessages.TYPE_GET_ROTATION:
                 return DaemonControlMessages.createGetRotation(dis.readLong(), dis.readInt());
             case DaemonControlMessages.TYPE_FREEZE_ROTATION:
@@ -43,6 +35,8 @@ public final class DaemonControlMessageReader {
                 return DaemonControlMessages.createIsRotationFrozen(dis.readLong(), dis.readInt());
             case DaemonControlMessages.TYPE_GET_ACTIVE_DISPLAY_INFOS:
                 return DaemonControlMessages.createGetActiveDisplayInfos(dis.readLong());
+            case DaemonControlMessages.TYPE_CONFIGURE_SESSION:
+                return parseConfigureSession(dis);
             default:
                 return null;
         }
@@ -97,17 +91,39 @@ public final class DaemonControlMessageReader {
         return DaemonControlMessages.createStartActivity(sequence, packageName, displayId);
     }
 
-    private static ControlMessage parseInjectInputEventWithDisplayId(DataInputStream dis) throws IOException {
+    private static ControlMessage parseConfigureSession(DataInputStream dis) throws IOException {
         long sequence = dis.readLong();
-        int displayId = dis.readInt();
-        boolean isKeyEvent = dis.readByte() != 0;
-        byte[] parcelBytes = parseByteArray(dis, 4);
-        return DaemonControlMessages.createInjectInputEventWithDisplayId(sequence, displayId, isKeyEvent, parcelBytes);
+        String optionsKv = parseString(dis);
+        int rolesMask = dis.readInt();
+        // Optional tail: int32 entriesCount, then (int8 role, int32 displayId)
+        // for each. The legacy wire format did not include the tail; a short
+        // read on the count (no more bytes available) falls back to the mask
+        // only, keeping backward compat with clients that don't send entries.
+        int entriesCount;
+        try {
+            entriesCount = dis.readInt();
+        } catch (IOException e) {
+            // Short read — treat as legacy mask-only payload.
+            return DaemonControlMessages.createConfigureSession(sequence, optionsKv, rolesMask);
+        }
+        if (entriesCount <= 0 || entriesCount > 64) {
+            // 0 entries valid (explicit mask-only); >64 is clearly garbage.
+            return DaemonControlMessages.createConfigureSession(sequence, optionsKv, rolesMask);
+        }
+        java.util.List<DaemonControlMessage.RoleEntry> entries = new java.util.ArrayList<>(entriesCount);
+        for (int i = 0; i < entriesCount; i++) {
+            int role = dis.readUnsignedByte();
+            int displayId = readInt32(dis);
+            entries.add(new DaemonControlMessage.RoleEntry(role, displayId));
+        }
+        return DaemonControlMessages.createConfigureSession(sequence, optionsKv, rolesMask, entries);
     }
 
-    private static ControlMessage parseSwitchDisplay(DataInputStream dis) throws IOException {
-        long sequence = dis.readLong();
-        int displayId = dis.readInt();
-        return DaemonControlMessages.createSwitchDisplay(sequence, displayId);
+    private static int readInt32(DataInputStream dis) throws IOException {
+        int b1 = dis.readUnsignedByte();
+        int b2 = dis.readUnsignedByte();
+        int b3 = dis.readUnsignedByte();
+        int b4 = dis.readUnsignedByte();
+        return (b1 << 24) | (b2 << 16) | (b3 << 8) | b4;
     }
 }

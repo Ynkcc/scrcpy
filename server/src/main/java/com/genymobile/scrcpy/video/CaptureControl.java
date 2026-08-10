@@ -1,6 +1,10 @@
 package com.genymobile.scrcpy.video;
 
+import com.genymobile.scrcpy.AndroidVersions;
+import com.genymobile.scrcpy.util.Ln;
+
 import android.media.MediaCodec;
+import android.os.Bundle;
 
 public class CaptureControl {
 
@@ -39,4 +43,29 @@ public class CaptureControl {
     public synchronized void setRunningMediaCodec(MediaCodec runningMediaCodec) {
         this.runningMediaCodec = runningMediaCodec;
     }
+
+    /**
+     * Request an instantaneous sync frame (IDR) from the running encoder.
+     *
+     * <p>Used by the daemon {@code FrameBroadcaster} when a new subscriber
+     * joins: the new client must receive a key frame (after the cached CSD) to
+     * start decoding correctly (refs/13 §4C). No-op if no encoder is running
+     * or the API level does not support {@link MediaCodec#PARAMETER_KEY_REQUEST_SYNC_FRAME}.
+     */
+    public synchronized void requestSyncFrame() {
+        if (runningMediaCodec == null) {
+            return;
+        }
+        if (android.os.Build.VERSION.SDK_INT < AndroidVersions.API_23_ANDROID_6_0) {
+            return;
+        }
+        try {
+            Bundle params = new Bundle();
+            params.putInt(MediaCodec.PARAMETER_KEY_REQUEST_SYNC_FRAME, 0);
+            runningMediaCodec.setParameters(params);
+        } catch (Throwable t) {
+            Ln.w("CaptureControl: requestSyncFrame failed: " + t.getMessage());
+        }
+    }
 }
+

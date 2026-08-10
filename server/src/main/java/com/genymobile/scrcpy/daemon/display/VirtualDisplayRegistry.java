@@ -12,8 +12,13 @@ import android.os.Handler;
 import android.os.HandlerThread;
 import android.view.Surface;
 
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Iterator;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 public final class VirtualDisplayRegistry {
 
@@ -21,6 +26,13 @@ public final class VirtualDisplayRegistry {
 
     private final Map<Integer, VirtualDisplaySession> activeSessions = new HashMap<>();
     private final Object activeDisplaysLock = new Object();
+
+    // Step 3 (VD 所有权): displayId → set of sessionIds currently using this
+    // display (creators + streamers). A display is only destroyed when its user
+    // set becomes empty, so a second client can keep a virtual display alive
+    // after the first client disconnects — the "lossless recovery" guarantee
+    // from refs/13 §7. Guarded by activeDisplaysLock.
+    private final Map<Integer, Set<Integer>> displayUsers = new HashMap<>();
 
     public VirtualDisplayRegistry() {
     }
@@ -122,29 +134,136 @@ public final class VirtualDisplayRegistry {
         VirtualDisplaySession session;
         synchronized (activeDisplaysLock) {
             session = activeSessions.remove(displayId);
+            displayUsers.remove(displayId); // also clear users (force-destroy path)
         }
 
         if (session != null) {
-            try {
-                // Thaw (un-freeze) rotation before releasing the virtual display
-                // so any previously frozen orientation state is released back to the system.
-                try {
-                    ServiceManager.getWindowManager().thawRotation(displayId);
-                    Ln.i("VirtualDisplayRegistry: thawed rotation for display id=" + displayId);
-                } catch (Throwable t) {
-                    Ln.w("VirtualDisplayRegistry: failed to thaw rotation for displayId=" + displayId, t);
-                }
-                DisplayCompat.moveTasksToDefaultDisplay(displayId);
-                session.close();
-                Ln.i("VirtualDisplayRegistry: released virtual display id=" + displayId);
-                return true;
-            } catch (Exception e) {
-                Ln.e("VirtualDisplayRegistry: failed to release virtual display id=" + displayId, e);
-                return false;
-            }
+            return actuallyDestroy(displayId, session);
         }
         Ln.w("VirtualDisplayRegistry: display id=" + displayId + " not found in activeSessions, performing best-effort release of orphan display");
         return DisplayCompat.bestEffortReleaseOrphan(displayId);
+    }
+
+    /**
+     * Actually tear down a virtual display: thaw rotation, migrate tasks back
+     * to the default display, close the session (VirtualDisplay + ImageReader).
+     * Called outside {@code activeDisplaysLock} — the heavy I/O must not hold
+     * the registry lock.
+     */
+    private boolean actuallyDestroy(int displayId, VirtualDisplaySession session) {
+        try {
+            // Thaw (un-freeze) rotation before releasing the virtual display
+            // so any previously frozen orientation state is released back to the system.
+            try {
+                ServiceManager.getWindowManager().thawRotation(displayId);
+                Ln.i("VirtualDisplayRegistry: thawed rotation for display id=" + displayId);
+            } catch (Throwable t) {
+                Ln.w("VirtualDisplayRegistry: failed to thaw rotation for displayId=" + displayId, t);
+            }
+            DisplayCompat.moveTasksToDefaultDisplay(displayId);
+            session.close();
+            Ln.i("VirtualDisplayRegistry: released virtual display id=" + displayId);
+            return true;
+        } catch (Exception e) {
+            Ln.e("VirtualDisplayRegistry: failed to release virtual display id=" + displayId, e);
+            return false;
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Step 3: per-session reference counting (VD 所有权)
+    // ------------------------------------------------------------------
+
+    /**
+     * Register a session as a user of the given virtual display. Must be called
+     * after {@link #createVirtualDisplay} (for the creator) or before
+     * {@code START_VIDEO_STREAM} (for a streamer attaching to an existing VD).
+     *
+     * <p>Idempotent: acquiring the same {@code (displayId, sessionId)} twice is
+     * a no-op (it's a {@link Set}), so CREATE + START_VIDEO_STREAM from the
+     * same session only counts once — a single {@link #release} is enough.
+     */
+    public void acquire(int displayId, int sessionId) {
+        synchronized (activeDisplaysLock) {
+            displayUsers.computeIfAbsent(displayId, k -> new HashSet<>()).add(sessionId);
+        }
+    }
+
+    /**
+     * Release a session's reference to a virtual display. If this was the last
+     * user, the display is actually destroyed (thaw rotation, migrate tasks,
+     * {@code VirtualDisplay.release}). Otherwise it survives for remaining
+     * users — the "lossless recovery" guarantee: client A can disconnect
+     * without destroying a display that client B is still watching.
+     *
+     * @return true if the display was destroyed, false if it still has users
+     */
+    public boolean release(int displayId, int sessionId) {
+        VirtualDisplaySession session = null;
+        boolean shouldDestroy = false;
+        synchronized (activeDisplaysLock) {
+            Set<Integer> users = displayUsers.get(displayId);
+            if (users != null) {
+                users.remove(Integer.valueOf(sessionId));
+                if (users.isEmpty()) {
+                    displayUsers.remove(displayId);
+                    shouldDestroy = true;
+                } else {
+                    Ln.i("VirtualDisplayRegistry: display id=" + displayId + " still has " + users.size()
+                            + " user(s) after release by session " + sessionId + " — not destroyed");
+                    return false;
+                }
+            } else {
+                // No users tracked for this display — best-effort force destroy.
+                shouldDestroy = true;
+            }
+            if (shouldDestroy) {
+                // Atomically claim the session for destruction while still
+                // holding the lock, so a concurrent acquire() can't sneak in
+                // between "decide to destroy" and "remove from activeSessions".
+                session = activeSessions.remove(displayId);
+            }
+        }
+        if (session != null) {
+            return actuallyDestroy(displayId, session);
+        }
+        if (shouldDestroy) {
+            Ln.w("VirtualDisplayRegistry: release(" + displayId + ", session=" + sessionId
+                    + ") — not in activeSessions, best-effort orphan release");
+            return DisplayCompat.bestEffortReleaseOrphan(displayId);
+        }
+        return false;
+    }
+
+    /**
+     * Release all virtual display references held by a session. Called from
+     * {@code ClientSession.cleanup()} so that a disconnecting client never
+     * orphans displays it created or was streaming. Displays that become
+     * userless as a result are destroyed; displays with remaining users
+     * survive.
+     */
+    public void releaseSession(int sessionId) {
+        List<Integer> toDestroy = new ArrayList<>();
+        synchronized (activeDisplaysLock) {
+            for (Iterator<Map.Entry<Integer, Set<Integer>>> it = displayUsers.entrySet().iterator(); it.hasNext();) {
+                Map.Entry<Integer, Set<Integer>> entry = it.next();
+                if (entry.getValue().remove(Integer.valueOf(sessionId)) && entry.getValue().isEmpty()) {
+                    toDestroy.add(entry.getKey());
+                    it.remove();
+                }
+            }
+        }
+        for (int displayId : toDestroy) {
+            VirtualDisplaySession session;
+            synchronized (activeDisplaysLock) {
+                session = activeSessions.remove(displayId);
+            }
+            if (session != null) {
+                actuallyDestroy(displayId, session);
+            }
+        }
+        Ln.i("VirtualDisplayRegistry: released all refs for session " + sessionId
+                + " (" + toDestroy.size() + " display(s) destroyed)");
     }
 
     public boolean resizeVirtualDisplay(int displayId, int width, int height, int dpi) {

@@ -1,7 +1,14 @@
 package com.genymobile.scrcpy.daemon;
 
+import com.genymobile.scrcpy.util.Ln;
+
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 public final class DaemonArgs {
 
@@ -53,6 +60,81 @@ public final class DaemonArgs {
             list.add("display_id=" + displayId);
         }
 
+        return list.toArray(new String[0]);
+    }
+
+    /**
+     * Option keys that a client MUST NOT override via {@code TYPE_CONFIGURE_SESSION}.
+     *
+     * <p>These either belong to the daemon bootstrap (daemon*), are owned by the
+     * daemon's own command set (display_id is set by START_VIDEO_STREAM, new_display
+     * is replaced by VirtualDisplayRegistry), control process lifecycle/security
+     * (scid, cleanup, power_*, tunnel_forward), or select non-mirroring modes
+     * (list_*). Allowing a client to set them would break the session contract.
+     */
+    private static final Set<String> BLOCKED_CONFIGURE_KEYS = Collections.unmodifiableSet(
+            new java.util.HashSet<>(Arrays.asList(
+                    "daemon", "daemon_port", "daemon_bind_address",
+                    "display_id", "new_display", "scid", "tunnel_forward",
+                    "cleanup", "power_on", "power_off_on_close",
+                    "list_encoders", "list_displays", "list_cameras",
+                    "list_camera_sizes", "list_apps")));
+
+    /**
+     * Merge client-supplied scrcpy option overrides into the daemon base args,
+     * producing a per-session args array suitable for {@code Options.parse}.
+     *
+     * <p>{@code baseArgs[0]} is the client version string (not a key=value pair)
+     * and is preserved verbatim as the first element. The remaining entries are
+     * key=value pairs; overrides from {@code optionsKv} replace existing keys or
+     * append new ones. Keys in {@link #BLOCKED_CONFIGURE_KEYS} are dropped with
+     * a warning.
+     *
+     * @param baseArgs  the scrubbed daemon base args ([0]=client version, rest key=value)
+     * @param optionsKv newline-separated {@code key=value} overrides; may be empty/null
+     * @return a new args array with overrides applied
+     */
+    public static String[] mergeOptions(String[] baseArgs, String optionsKv) {
+        if (baseArgs == null || baseArgs.length == 0) {
+            return new String[0];
+        }
+
+        // Preserve insertion order so the merged args stay deterministic.
+        LinkedHashMap<String, String> map = new LinkedHashMap<>();
+        for (int i = 1; i < baseArgs.length; i++) {
+            String arg = baseArgs[i];
+            int eq = arg.indexOf('=');
+            if (eq != -1) {
+                map.put(arg.substring(0, eq), arg.substring(eq + 1));
+            }
+        }
+
+        if (optionsKv != null && !optionsKv.isEmpty()) {
+            for (String line : optionsKv.split("\n", -1)) {
+                String trimmed = line.trim();
+                if (trimmed.isEmpty()) {
+                    continue;
+                }
+                int eq = trimmed.indexOf('=');
+                if (eq == -1) {
+                    Ln.w("DaemonArgs.mergeOptions: ignoring malformed option line: " + trimmed);
+                    continue;
+                }
+                String key = trimmed.substring(0, eq);
+                String value = trimmed.substring(eq + 1);
+                if (BLOCKED_CONFIGURE_KEYS.contains(key)) {
+                    Ln.w("DaemonArgs.mergeOptions: ignoring blocked option key in CONFIGURE_SESSION: " + key);
+                    continue;
+                }
+                map.put(key, value);
+            }
+        }
+
+        List<String> list = new ArrayList<>(map.size() + 1);
+        list.add(baseArgs[0]); // client version
+        for (Map.Entry<String, String> e : map.entrySet()) {
+            list.add(e.getKey() + "=" + e.getValue());
+        }
         return list.toArray(new String[0]);
     }
 }

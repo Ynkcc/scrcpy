@@ -1,0 +1,48 @@
+package com.genymobile.scrcpy.video;
+
+import com.genymobile.scrcpy.model.Codec;
+
+import java.io.IOException;
+import java.nio.ByteBuffer;
+
+/**
+ * Abstraction over the destination of encoded video packets.
+ *
+ * <p>This lets {@link SurfaceEncoder} write to either a single socket (via the
+ * legacy {@code Streamer}, which implements this interface) or to a fan-out
+ * broadcaster (daemon multi-client path). The encoder no longer depends on a
+ * concrete socket writer.
+ *
+ * <p>Method signatures mirror the existing {@code Streamer} methods so that
+ * {@code Streamer} can implement this interface with zero behaviour change.
+ */
+public interface FrameSink {
+
+    /** Write the stream header (codec id) once at the start of the stream. */
+    void writeVideoHeader() throws IOException;
+
+    /**
+     * Write session metadata (dimensions / resize flag). Called once at the
+     * start and again whenever the encoder resets on a resize.
+     */
+    void writeSessionMeta(int width, int height, boolean isClientResize) throws IOException;
+
+    /**
+     * Write one encoded packet.
+     *
+     * @param buffer   the encoded bytes (positioned at the data start)
+     * @param pts      presentation timestamp in microseconds
+     * @param config   {@code true} if this is a codec-config (CSD) packet
+     * @param keyFrame {@code true} if this is a key frame (IDR)
+     */
+    void writePacket(ByteBuffer buffer, long pts, boolean config, boolean keyFrame) throws IOException;
+
+    /** @return the codec used by the encoder bound to this sink. */
+    Codec getCodec();
+
+    /** @return whether stream-level meta (codec id, session meta) is emitted. */
+    boolean getSendStreamMeta();
+
+    /** @return whether per-frame meta (pts + size header) is emitted. */
+    boolean getSendFrameMeta();
+}

@@ -1,5 +1,9 @@
 package com.genymobile.scrcpy.daemon.control;
 
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+
 /**
  * Carrier for daemon-mode control message fields.
  *
@@ -11,6 +15,36 @@ package com.genymobile.scrcpy.daemon.control;
  */
 public final class DaemonControlMessage {
 
+    /**
+     * A (role, displayId) declaration sent in CONFIGURE_SESSION so the
+     * negotiation channel knows which role sockets the client intends to
+     * open, and which display each socket is bound to. With multi-display
+     * per-session the client can now declare N ROLE_VIDEO + N ROLE_CONTROL
+     * entries, one per virtual display.
+     */
+    public static final class RoleEntry {
+        public final int role;
+        public final int displayId;
+
+        public RoleEntry(int role, int displayId) {
+            this.role = role;
+            this.displayId = displayId;
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) return true;
+            if (!(o instanceof RoleEntry)) return false;
+            RoleEntry that = (RoleEntry) o;
+            return role == that.role && displayId == that.displayId;
+        }
+
+        @Override
+        public int hashCode() {
+            return 31 * role + displayId;
+        }
+    }
+
     private long sequence;
     private String text;       // display name (create) or package name (start activity)
     private int displayId;
@@ -19,7 +53,10 @@ public final class DaemonControlMessage {
     private int dpi;
     private int flags;         // virtual-display flags, or rotation value for freeze
     private boolean isKeyEvent;
-    private byte[] data;       // marshalled InputEvent parcel bytes
+    private byte[] data;       // (kept for future use)
+    private String optionsKv;  // newline-separated key=value scrcpy options (CONFIGURE_SESSION)
+    private int rolesMask;     // legacy: bitmask of role types allowed (ignored if rolesEntries present)
+    private List<RoleEntry> rolesEntries = Collections.emptyList(); // multi-role multi-display declaration
 
     public long getSequence() {
         return sequence;
@@ -91,5 +128,30 @@ public final class DaemonControlMessage {
 
     public void setData(byte[] data) {
         this.data = data;
+    }
+
+    public String getOptionsKv() {
+        return optionsKv;
+    }
+
+    public void setOptionsKv(String optionsKv) {
+        this.optionsKv = optionsKv;
+    }
+
+    public int getRolesMask() {
+        return rolesMask;
+    }
+
+    public void setRolesMask(int rolesMask) {
+        this.rolesMask = rolesMask;
+    }
+
+    public List<RoleEntry> getRolesEntries() {
+        return rolesEntries;
+    }
+
+    public void setRolesEntries(List<RoleEntry> rolesEntries) {
+        this.rolesEntries = rolesEntries != null ? Collections.unmodifiableList(new ArrayList<>(rolesEntries))
+                : Collections.emptyList();
     }
 }

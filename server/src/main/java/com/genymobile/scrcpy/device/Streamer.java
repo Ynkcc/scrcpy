@@ -3,6 +3,7 @@ package com.genymobile.scrcpy.device;
 import com.genymobile.scrcpy.audio.AudioCodec;
 import com.genymobile.scrcpy.model.Codec;
 import com.genymobile.scrcpy.util.IO;
+import com.genymobile.scrcpy.video.FrameSink;
 
 import android.media.MediaCodec;
 
@@ -12,7 +13,15 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.Arrays;
 
-public final class Streamer {
+/**
+ * Writes encoded packets to a single socket file descriptor.
+ *
+ * <p>Implements {@link FrameSink} so that {@code SurfaceEncoder} can target
+ * either this single-socket writer (legacy / {@code Server.java} path) or a
+ * daemon {@code FrameBroadcaster} (multi-client fan-out) through the same
+ * abstraction. All methods are unchanged in behaviour.
+ */
+public final class Streamer implements FrameSink {
 
     private static final long PACKET_FLAG_SESSION = 1L << 63;
     private static final long PACKET_FLAG_CONFIG = 1L << 62;
@@ -32,8 +41,19 @@ public final class Streamer {
         this.sendFrameMeta = sendFrameMeta;
     }
 
+    @Override
     public Codec getCodec() {
         return codec;
+    }
+
+    @Override
+    public boolean getSendStreamMeta() {
+        return sendStreamMeta;
+    }
+
+    @Override
+    public boolean getSendFrameMeta() {
+        return sendFrameMeta;
     }
 
     public void writeAudioHeader() throws IOException {
@@ -45,6 +65,7 @@ public final class Streamer {
         }
     }
 
+    @Override
     public void writeVideoHeader() throws IOException {
         if (sendStreamMeta) {
             ByteBuffer buffer = ByteBuffer.allocate(4);
@@ -65,6 +86,7 @@ public final class Streamer {
         IO.writeFully(fd, code, 0, code.length);
     }
 
+    @Override
     public void writePacket(ByteBuffer buffer, long pts, boolean config, boolean keyFrame) throws IOException {
         if (config) {
             if (codec == AudioCodec.OPUS) {
@@ -88,6 +110,7 @@ public final class Streamer {
         writePacket(codecBuffer, pts, config, keyFrame);
     }
 
+    @Override
     public void writeSessionMeta(int width, int height, boolean isClientResize) throws IOException {
         if (sendStreamMeta) {
             headerBuffer.clear();

@@ -1,0 +1,340 @@
+package com.genymobile.scrcpy.daemon.video;
+
+import com.genymobile.scrcpy.Options;
+import com.genymobile.scrcpy.control.Controller;
+import com.genymobile.scrcpy.daemon.DaemonVideoPipeline;
+import com.genymobile.scrcpy.daemon.display.DisplaySurfaceBroker;
+import com.genymobile.scrcpy.device.Streamer;
+import com.genymobile.scrcpy.model.Codec;
+import com.genymobile.scrcpy.util.Ln;
+import com.genymobile.scrcpy.video.CaptureControl;
+import com.genymobile.scrcpy.video.FrameSink;
+import com.genymobile.scrcpy.video.SurfaceCapture;
+import com.genymobile.scrcpy.video.SurfaceEncoder;
+
+import java.io.FileDescriptor;
+import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
+
+/**
+ * The shared video source for one {@code displayId}: a single
+ * {@link SurfaceEncoder} + {@link SurfaceCapture} bound to the virtual
+ * display's surface, fanning encoded frames out to N {@link VideoSubscriber}s.
+ *
+ * <p>This is Layer 2 of refs/13 §5 — "encode once, distribute to many". With
+ * this class, N clients watching the same displayId share one encoder instead
+ * of each spinning up their own. It also fixes the structural single-client
+ * bug: {@code VirtualDisplay.setSurface()} is called <em>once</em> (with the
+ * shared encoder's input surface) instead of once per client (which would
+ * silently overwrite and break earlier clients).
+ *
+ * <p>Lifecycle (mirrors {@code VirtualDisplayRegistry}'s refcount model):
+ * <ul>
+ *   <li>Created lazily by {@link FrameBroadcasterRegistry} on the first
+ *       {@code acquireSubscriber} for a displayId. The first subscriber's
+ *       {@code CONFIGURE_SESSION} options are baked into the shared encoder
+ *       (A1).</li>
+ *   <li>Each subsequent subscriber is attached via {@link #subscribe} which
+ *       replays the cached stream header + session meta + CSD and requests an
+ *       IDR so the new client can decode immediately (refs/13 §4C, A2).</li>
+ *   <li>When the last subscriber leaves, the registry calls {@link #shutdown}:
+ *       stop the encoder, release the capture, restore the VD's fallback
+ *       surface. The VD itself is <em>not</em> destroyed — its lifetime is
+ *       owned by {@code VirtualDisplayRegistry} (refs/13 §7, A5).</li>
+ * </ul>
+ *
+ * <p>Threading: {@link FrameSink} methods ({@code writeVideoHeader} /
+ * {@code writeSessionMeta} / {@code writePacket}) are invoked on the single
+ * encode thread. {@code subscribe} / {@code unsubscribe} are invoked on the
+ * negotiation handler thread. Both serialize on {@link #lock}.
+ */
+final class FrameBroadcaster implements FrameSink {
+
+    private final int displayId;
+    private final DisplaySurfaceBroker surfaceBroker;
+    private final Codec codec;
+    private final boolean sendStreamMeta;
+    private final boolean sendFrameMeta;
+
+    private final Object lock = new Object();
+    private final List<VideoSubscriber> subscribers = new ArrayList<>();
+    // sessionId → subscriber, for O(1) lookup on releaseSession (A9).
+    private final Map<Integer, VideoSubscriber> subscribersBySession = new HashMap<>();
+
+    // Cached for late-joiner replay (refs/13 §4C, A2). Written on the encode
+    // thread, read on subscribe() — both under `lock`.
+    private Frame cachedHeader;
+    private Frame cachedMeta;
+    private Frame cachedConfigPacket;
+
+    // Set in create() after the pipeline is built. Not final because of the
+    // chicken-and-egg: the encoder needs `this` (as FrameSink) at construction.
+    private SurfaceCapture surfaceCapture;
+    private SurfaceEncoder surfaceEncoder;
+
+    private Thread encodeThread;
+    private final AtomicBoolean started = new AtomicBoolean(false);
+    private final AtomicBoolean shutdown = new AtomicBoolean(false);
+
+    private FrameBroadcaster(int displayId, DisplaySurfaceBroker broker, Options options) {
+        this.displayId = displayId;
+        this.surfaceBroker = broker;
+        this.codec = options.getVideoCodec();
+        this.sendStreamMeta = options.getSendStreamMeta();
+        this.sendFrameMeta = options.getSendFrameMeta();
+    }
+
+    /**
+     * Build the shared capture+encoder pipeline with {@code this} as the
+     * encoder's {@link FrameSink}, then start the encode thread.
+     *
+     * @param baseArgs  per-session scrubbed scrcpy args (display_id will be rewritten)
+     * @param options   per-session options (codec / bitrate / meta flags); baked into the shared encoder
+     * @param controller the first subscriber's controller (used as
+     *                   {@code VirtualDisplayListener}); may be {@code null}
+     *                   if the control socket hasn't bound yet — a no-op
+     *                   listener is used (single-client input mapping is
+     *                   preserved; multi-client input mapping is a later step)
+     */
+    static FrameBroadcaster create(int displayId, String[] baseArgs, Options options,
+                                   DisplaySurfaceBroker broker, Controller controller) throws Exception {
+        FrameBroadcaster b = new FrameBroadcaster(displayId, broker, options);
+        DaemonVideoPipeline.Built built = DaemonVideoPipeline.buildBroadcaster(
+                displayId, baseArgs, options, broker, controller, b);
+        b.surfaceCapture = built.getSurfaceCapture();
+        b.surfaceEncoder = built.getSurfaceEncoder();
+        b.startEncodeThread();
+        Ln.i("FrameBroadcaster[" + displayId + "]: created (codec=" + options.getVideoCodec()
+                + ", sendStreamMeta=" + options.getSendStreamMeta()
+                + ", sendFrameMeta=" + options.getSendFrameMeta() + ")");
+        return b;
+    }
+
+    private void startEncodeThread() {
+        if (!started.compareAndSet(false, true)) {
+            return;
+        }
+        encodeThread = new Thread(() -> {
+            try {
+                surfaceEncoder.start(fatalError -> {
+                    Ln.i("FrameBroadcaster[" + displayId + "]: encoder terminated, fatal=" + fatalError);
+                    started.set(false);
+                });
+                surfaceEncoder.join();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            } finally {
+                started.set(false);
+                Ln.i("FrameBroadcaster[" + displayId + "]: encode thread exited");
+            }
+        }, "video-bcast-" + displayId);
+        encodeThread.setDaemon(true);
+        encodeThread.start();
+    }
+
+    /**
+     * Attach a new client subscriber. Replays the cached stream header, session
+     * meta and CSD so the client can initialize its decoder, then requests an
+     * IDR for a promptly-decodable keyframe (refs/13 §4C, A2).
+     */
+    VideoSubscriber subscribe(int sessionId, FileDescriptor videoFd) {
+        Streamer streamer = new Streamer(videoFd, codec, sendStreamMeta, sendFrameMeta);
+        VideoSubscriber sub = new VideoSubscriber(sessionId, streamer);
+        synchronized (lock) {
+            subscribers.add(sub);
+            subscribersBySession.put(sessionId, sub);
+            if (cachedHeader != null) {
+                sub.deliver(cachedHeader);
+            }
+            if (cachedMeta != null) {
+                sub.deliver(cachedMeta);
+            }
+            if (cachedConfigPacket != null) {
+                sub.deliver(cachedConfigPacket);
+            }
+        }
+        sub.start();
+        if (surfaceEncoder != null) {
+            surfaceEncoder.requestSyncFrame();
+        }
+        Ln.i("FrameBroadcaster[" + displayId + "]: subscriber " + sessionId
+                + " added (count=" + subscriberCount() + ")");
+        return sub;
+    }
+
+    void unsubscribe(VideoSubscriber sub) {
+        if (sub == null) {
+            return;
+        }
+        synchronized (lock) {
+            subscribers.remove(sub);
+            subscribersBySession.remove(sub.getSessionId());
+        }
+        sub.close();
+        Ln.i("FrameBroadcaster[" + displayId + "]: subscriber " + sub.getSessionId()
+                + " removed (count=" + subscriberCount() + ")");
+    }
+
+    /**
+     * Detach the subscriber belonging to {@code sessionId}, if any. Used by the
+     * registry's {@code releaseSession} safety-net cleanup.
+     *
+     * @return the subscriber count after removal (0 signals the registry to shut
+     *         this broadcaster down)
+     */
+    int unsubscribeBySession(int sessionId) {
+        VideoSubscriber sub;
+        synchronized (lock) {
+            sub = subscribersBySession.remove(sessionId);
+            if (sub != null) {
+                subscribers.remove(sub);
+            }
+            return subscribers.size();
+        }
+    }
+
+    int subscriberCount() {
+        synchronized (lock) {
+            return subscribers.size();
+        }
+    }
+
+    /**
+     * Kick the shared encoder pipeline (e.g. after a VD resize) so it rebuilds
+     * at the new dimensions. All subscribers receive a fresh session meta from
+     * the encoder's reset path.
+     */
+    void kick(int resetReasons) {
+        if (surfaceCapture != null) {
+            CaptureControl cc = surfaceCapture.getCaptureControl();
+            if (cc != null) {
+                cc.reset(resetReasons);
+                Ln.i("FrameBroadcaster[" + displayId + "]: kicked encoder (reasons=0x"
+                        + Integer.toHexString(resetReasons) + ")");
+            }
+        }
+    }
+
+    /**
+     * Tear down the shared encoder + capture and restore the VD's fallback
+     * surface. Does NOT destroy the VD (its lifetime is managed by
+     * {@code VirtualDisplayRegistry}). Called by the registry when the last
+     * subscriber leaves (refs/13 §7, A5).
+     */
+    void shutdown() {
+        if (!shutdown.compareAndSet(false, true)) {
+            return;
+        }
+        Ln.i("FrameBroadcaster[" + displayId + "]: shutting down (last subscriber gone)");
+        if (surfaceEncoder != null) {
+            surfaceEncoder.stop();
+        }
+        if (encodeThread != null) {
+            try {
+                encodeThread.join(2000);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }
+        if (surfaceCapture != null) {
+            surfaceCapture.release();
+        }
+        // Restore the VD's ImageReader fallback surface so the virtual display
+        // keeps rendering into the ImageReader instead of the (now-released)
+        // encoder input surface. This is the "lossless recovery" guarantee.
+        if (surfaceBroker != null) {
+            try {
+                surfaceBroker.restore(displayId);
+            } catch (Throwable t) {
+                Ln.w("FrameBroadcaster[" + displayId + "]: failed to restore fallback surface", t);
+            }
+        }
+        synchronized (lock) {
+            for (VideoSubscriber sub : subscribers) {
+                sub.close();
+            }
+            subscribers.clear();
+            subscribersBySession.clear();
+        }
+    }
+
+    // ----- FrameSink implementation (called from the encode thread) -----
+
+    @Override
+    public void writeVideoHeader() throws IOException {
+        Frame f = Frame.header();
+        synchronized (lock) {
+            cachedHeader = f;
+            fanOut(f);
+        }
+    }
+
+    @Override
+    public void writeSessionMeta(int width, int height, boolean isClientResize) throws IOException {
+        Frame f = Frame.meta(width, height, isClientResize);
+        synchronized (lock) {
+            cachedMeta = f;
+            fanOut(f);
+        }
+    }
+
+    @Override
+    public void writePacket(ByteBuffer buffer, long pts, boolean config, boolean keyFrame) throws IOException {
+        Frame f = Frame.packet(buffer, pts, config, keyFrame);
+        synchronized (lock) {
+            if (config) {
+                // Cache the latest CSD so a subscriber joining later can init
+                // its decoder before the next keyframe (refs/13 §4C, A2).
+                cachedConfigPacket = f;
+            }
+            fanOut(f);
+        }
+    }
+
+    @Override
+    public Codec getCodec() {
+        return codec;
+    }
+
+    @Override
+    public boolean getSendStreamMeta() {
+        return sendStreamMeta;
+    }
+
+    @Override
+    public boolean getSendFrameMeta() {
+        return sendFrameMeta;
+    }
+
+    /**
+     * Deliver a frame to every live subscriber and reap dead ones. Must be
+     * called holding {@link #lock}. {@code deliver} is non-blocking (bounded
+     * queue offer + local eviction), so the encode thread never stalls on a
+     * slow subscriber (refs/13 §3, A3).
+     */
+    private void fanOut(Frame f) {
+        Iterator<VideoSubscriber> it = subscribers.iterator();
+        while (it.hasNext()) {
+            VideoSubscriber sub = it.next();
+            if (!sub.isAlive()) {
+                Ln.i("FrameBroadcaster[" + displayId + "]: reaping dead subscriber " + sub.getSessionId());
+                it.remove();
+                subscribersBySession.remove(sub.getSessionId());
+                sub.close();
+                continue;
+            }
+            sub.deliver(f);
+            if (!sub.isAlive()) {
+                it.remove();
+                subscribersBySession.remove(sub.getSessionId());
+                sub.close();
+            }
+        }
+    }
+}
