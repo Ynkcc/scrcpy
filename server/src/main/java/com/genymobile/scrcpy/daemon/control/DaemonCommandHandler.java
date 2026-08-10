@@ -8,6 +8,7 @@ import com.genymobile.scrcpy.control.DeviceMessageSender;
 import com.genymobile.scrcpy.device.Device;
 import com.genymobile.scrcpy.daemon.display.VirtualDisplayRegistry;
 import com.genymobile.scrcpy.daemon.display.ActivityLauncher;
+import com.genymobile.scrcpy.daemon.display.AppLister;
 import com.genymobile.scrcpy.daemon.display.RotationController;
 import com.genymobile.scrcpy.daemon.DaemonExitCoordinator;
 import com.genymobile.scrcpy.daemon.SessionConfigurator;
@@ -82,7 +83,7 @@ public final class DaemonCommandHandler implements ControlMessageExtension {
     }
 
     private final ExecutorService interactiveExecutor = Executors.newSingleThreadExecutor(new LooperThreadFactory("daemon-cmd-interactive"));
-    private final ExecutorService lifecycleExecutor = Executors.newFixedThreadPool(2, new LooperThreadFactory("daemon-cmd-lifecycle"));
+    private final ExecutorService lifecycleExecutor = Executors.newFixedThreadPool(4, new LooperThreadFactory("daemon-cmd-lifecycle"));
     private final Map<Integer, HandlerEntry> registryMap = new HashMap<>();
 
     public DaemonCommandHandler(Controller controller,
@@ -262,6 +263,23 @@ public final class DaemonCommandHandler implements ControlMessageExtension {
             DaemonControlMessage dto = payload(msg);
             sessionConfigurator.configure(dto.getOptionsKv(), dto.getRolesMask(), dto.getRolesEntries());
             sendSuccessResponse(msg, -1, "OK");
+        });
+
+        register(DaemonControlMessages.TYPE_LAUNCH_HOME, ExecutionPolicy.SLOW, (msg, ctx) -> {
+            DaemonControlMessage dto = payload(msg);
+            int result = ActivityLauncher.launchHome(dto.getDisplayId());
+            if (result < 0) {
+                throw new RuntimeException("FAILED");
+            }
+            sendSuccessResponse(msg, dto.getDisplayId(), "OK");
+        });
+
+        register(DaemonControlMessages.TYPE_LIST_APPS, ExecutionPolicy.SLOW, (msg, ctx) -> {
+            java.util.List<com.genymobile.scrcpy.model.DeviceApp> apps = AppLister.listInstalledApps();
+            if (ctx.getSender() != null) {
+                DeviceMessage response = DaemonDeviceMessages.createAppsListResponse(payload(msg).getSequence(), apps);
+                ctx.getSender().send(response);
+            }
         });
     }
 

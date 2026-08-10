@@ -2,6 +2,9 @@ package com.genymobile.scrcpy.daemon.control;
 
 import com.genymobile.scrcpy.control.DeviceMessage;
 import com.genymobile.scrcpy.display.DisplayInfo;
+import com.genymobile.scrcpy.model.DeviceApp;
+
+import java.util.List;
 
 public final class DaemonDeviceMessages {
 
@@ -9,6 +12,9 @@ public final class DaemonDeviceMessages {
     public static final int TYPE_RESPONSE_ACTIVE_DISPLAYS = 101;
     // Enriched variant of 101: carries per-display {id,width,height,dpi,rotation}.
     public static final int TYPE_RESPONSE_ACTIVE_DISPLAY_INFOS = 102;
+    // List of installed apps (non-system with launch intent) for the remote device.
+    // Enables uniform AppSelectionDialog on both local and remote nodes.
+    public static final int TYPE_RESPONSE_APPS_LIST = 103;
 
     private DaemonDeviceMessages() {
     }
@@ -44,5 +50,12 @@ public final class DaemonDeviceMessages {
         dto.setSequence(sequence);
         dto.setDisplayInfos(infos);
         return envelope(TYPE_RESPONSE_ACTIVE_DISPLAY_INFOS, dto);
+    }
+
+    public static DeviceMessage createAppsListResponse(long sequence, List<DeviceApp> apps) {
+        DaemonDeviceMessage dto = new DaemonDeviceMessage();
+        dto.setSequence(sequence);
+        dto.setApps(apps);
+        return envelope(TYPE_RESPONSE_APPS_LIST, dto);
     }
 }

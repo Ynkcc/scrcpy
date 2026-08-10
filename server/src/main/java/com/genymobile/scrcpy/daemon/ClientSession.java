@@ -114,7 +114,19 @@ public final class ClientSession implements Runnable, SessionConfigurator {
                     negotiationSender, null, registry, exitCoordinator, null, this, broadcasterRegistry, sessionId);
 
             while (!exited.get() && !Thread.currentThread().isInterrupted()) {
-                ControlMessage msg = connection.getNegotiationChannel().recv();
+                ControlMessage msg;
+                try {
+                    msg = connection.getNegotiationChannel().recv();
+                } catch (java.net.SocketTimeoutException ste) {
+                    // SO_TIMEOUT on the negotiation socket fired. This is
+                    // expected for idle long-lived connections (the client
+                    // may go minutes without sending a command). Log at
+                    // DEBUG level and keep the loop alive — the next recv
+                    // will block again until either a real message arrives
+                    // or the socket is genuinely closed by the peer.
+                    Ln.d("Session[" + sessionId + "]: negotiation socket idle timeout, continuing to wait");
+                    continue;
+                }
                 if (msg == null) {
                     break;
                 }

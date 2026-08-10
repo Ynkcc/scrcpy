@@ -37,6 +37,10 @@ public final class DaemonControlMessageReader {
                 return DaemonControlMessages.createGetActiveDisplayInfos(dis.readLong());
             case DaemonControlMessages.TYPE_CONFIGURE_SESSION:
                 return parseConfigureSession(dis);
+            case DaemonControlMessages.TYPE_LAUNCH_HOME:
+                return DaemonControlMessages.createLaunchHome(dis.readLong(), dis.readInt());
+            case DaemonControlMessages.TYPE_LIST_APPS:
+                return DaemonControlMessages.createListApps(dis.readLong());
             default:
                 return null;
         }

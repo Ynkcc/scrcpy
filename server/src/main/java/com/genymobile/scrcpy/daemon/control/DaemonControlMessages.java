@@ -32,6 +32,17 @@ public final class DaemonControlMessages {
     // to bind — enforcing "negotiate first, open more sockets after".
     public static final int TYPE_CONFIGURE_SESSION = 216;
 
+    // Launch the device's default home launcher on a specific virtual display.
+    // Payload: int32 displayId. Server resolves the home component itself
+    // (so the client doesn't need to query the remote device's launcher list
+    // — unifies local and remote node behaviour).
+    public static final int TYPE_LAUNCH_HOME = 217;
+
+    // List installed apps on the device. Returns the list of non-system apps
+    // that have a launch intent, so the client AppSelectionDialog works
+    // identically for both local and remote nodes.
+    public static final int TYPE_LIST_APPS = 218;
+
     private DaemonControlMessages() {
     }
 
@@ -159,5 +170,18 @@ public final class DaemonControlMessages {
         dto.setRolesMask(rolesMask);
         dto.setRolesEntries(rolesEntries);
         return envelope(TYPE_CONFIGURE_SESSION, dto);
+    }
+
+    public static ControlMessage createLaunchHome(long sequence, int displayId) {
+        DaemonControlMessage dto = new DaemonControlMessage();
+        dto.setSequence(sequence);
+        dto.setDisplayId(displayId);
+        return envelope(TYPE_LAUNCH_HOME, dto);
+    }
+
+    public static ControlMessage createListApps(long sequence) {
+        DaemonControlMessage dto = new DaemonControlMessage();
+        dto.setSequence(sequence);
+        return envelope(TYPE_LIST_APPS, dto);
     }
 }

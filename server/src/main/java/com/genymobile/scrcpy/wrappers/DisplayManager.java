@@ -51,6 +51,7 @@ public final class DisplayManager {
     private Method createVirtualDisplayGlobalMethod;
     private Constructor<?> displayManagerCtor;
     private Method requestDisplayPowerMethod;
+    private boolean requestDisplayPowerUsesInt; // true 表示第二个参数为 int（Display.STATE_*），false 表示 boolean
 
     static DisplayManager create() {
         try {
@@ -260,15 +261,31 @@ public final class DisplayManager {
 
     private Method getRequestDisplayPowerMethod() throws NoSuchMethodException {
         if (requestDisplayPowerMethod == null) {
-            requestDisplayPowerMethod = manager.getClass().getMethod("requestDisplayPower", int.class, boolean.class);
+            // 不同 Android 版本第二个参数不同：boolean（旧）或 int Display.STATE_*（新）
+            try {
+                requestDisplayPowerMethod = manager.getClass().getDeclaredMethod("requestDisplayPower", int.class, boolean.class);
+                requestDisplayPowerUsesInt = false;
+            } catch (NoSuchMethodException e) {
+                requestDisplayPowerMethod = manager.getClass().getDeclaredMethod("requestDisplayPower", int.class, int.class);
+                requestDisplayPowerUsesInt = true;
+            }
+            requestDisplayPowerMethod.setAccessible(true);
         }
         return requestDisplayPowerMethod;
     }
 
     @TargetApi(AndroidVersions.API_35_ANDROID_15)
     public boolean requestDisplayPower(int displayId, boolean on) {
+        if (android.os.Build.VERSION.SDK_INT < AndroidVersions.API_35_ANDROID_15) {
+            return false;
+        }
         try {
             Method method = getRequestDisplayPowerMethod();
+            if (requestDisplayPowerUsesInt) {
+                // int 版本使用 Display.STATE_ON(2) / Display.STATE_OFF(1)
+                int state = on ? android.view.Display.STATE_ON : android.view.Display.STATE_OFF;
+                return (boolean) method.invoke(manager, displayId, state);
+            }
             return (boolean) method.invoke(manager, displayId, on);
         } catch (ReflectiveOperationException e) {
             Ln.e("Could not invoke method", e);

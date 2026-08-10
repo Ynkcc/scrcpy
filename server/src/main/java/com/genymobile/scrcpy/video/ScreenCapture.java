@@ -160,27 +160,34 @@ public class ScreenCapture extends SurfaceCapture {
         try {
             virtualDisplay = ServiceManager.getDisplayManager()
                     .createVirtualDisplay("scrcpy", inputSize.getWidth(), inputSize.getHeight(), displayId, surface);
-            Ln.d("Display: using DisplayManager API");
+            Ln.d("Display: using DisplayManager API for displayId=" + displayId + " arity=5");
         } catch (Exception displayManagerException) {
-            if (Build.BRAND.equalsIgnoreCase("oculus") && Build.MODEL.toLowerCase(Locale.ROOT).startsWith("quest")) {
-                // Workaround for buggy createVirtualDisplay on Quest
-                try {
-                    virtualDisplay = (VirtualDisplay) VirtualDisplay.class.getDeclaredConstructors()[0].newInstance(null, null, null, surface);
-                } catch (ReflectiveOperationException e) {
-                    Ln.e("Could not create VirtualDisplay", e);
-                }
-            } else {
-                try {
-                    display = createDisplay();
+            try {
+                virtualDisplay = ServiceManager.getDisplayManager()
+                        .createNewVirtualDisplay("scrcpy", inputSize.getWidth(), inputSize.getHeight(), displayInfo.getDpi(), surface, 0);
+                Ln.d("Display: using DisplayManager API for displayId=" + displayId + " arity=6 (fallback)");
+            } catch (Exception arity6Exception) {
+                if (Build.BRAND.equalsIgnoreCase("oculus") && Build.MODEL.toLowerCase(Locale.ROOT).startsWith("quest")) {
+                    // Workaround for buggy createVirtualDisplay on Quest
+                    try {
+                        virtualDisplay = (VirtualDisplay) VirtualDisplay.class.getDeclaredConstructors()[0].newInstance(null, null, null, surface);
+                    } catch (ReflectiveOperationException e) {
+                        Ln.e("Could not create VirtualDisplay", e);
+                    }
+                } else {
+                    try {
+                        display = createDisplay();
 
-                    Size deviceSize = displayInfo.getSize();
-                    int layerStack = displayInfo.getLayerStack();
-                    setDisplaySurface(display, surface, deviceSize.toRect(), inputSize.toRect(), layerStack);
-                    Ln.d("Display: using SurfaceControl API");
-                } catch (Exception surfaceControlException) {
-                    Ln.e("Could not create display using DisplayManager", displayManagerException);
-                    Ln.e("Could not create display using SurfaceControl", surfaceControlException);
-                    throw new AssertionError("Could not create display");
+                        Size deviceSize = displayInfo.getSize();
+                        int layerStack = displayInfo.getLayerStack();
+                        setDisplaySurface(display, surface, deviceSize.toRect(), inputSize.toRect(), layerStack);
+                        Ln.d("Display: using SurfaceControl API");
+                    } catch (Exception surfaceControlException) {
+                        Ln.e("Could not create display using DisplayManager (5-args)", displayManagerException);
+                        Ln.e("Could not create display using DisplayManager (6-args)", arity6Exception);
+                        Ln.e("Could not create display using SurfaceControl", surfaceControlException);
+                        throw new AssertionError("Could not create display");
+                    }
                 }
             }
         }

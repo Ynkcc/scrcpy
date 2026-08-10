@@ -25,6 +25,14 @@ public final class DaemonServer {
 
     private static final int MAX_SESSIONS = 16;
 
+    /** Socket read timeout (ms) applied to all accepted sockets.
+     *  Protects acceptLoop and per-session recv loops from indefinite
+     *  blocking on half-open connections. The value is long enough that
+     *  legitimate SLOW commands (create VD, list apps, start activity)
+     *  can still run end-to-end, but short enough to break a dead socket
+     *  within an operational window. */
+    private static final int SOCKET_READ_TIMEOUT_MS = 60_000;
+
     private final Options options;
     private final DaemonOptions daemonOptions;
     private final String[] baseArgs;
@@ -102,6 +110,13 @@ public final class DaemonServer {
         while (running.get()) {
             try {
                 Socket socket = TcpServerSocketListener.acceptNextSocket();
+                try {
+                    socket.setSoTimeout(SOCKET_READ_TIMEOUT_MS);
+                } catch (Exception ignored) {
+                    // Some socket implementations may not support SO_TIMEOUT;
+                    // continue without it — the accept path already has
+                    // defense-in-depth against half-open connections.
+                }
                 String ip = socket.getInetAddress().getHostAddress();
                 if (blacklistedIps.contains(ip)) {
                     Ln.w("Connection rejected from blacklisted IP: " + ip);

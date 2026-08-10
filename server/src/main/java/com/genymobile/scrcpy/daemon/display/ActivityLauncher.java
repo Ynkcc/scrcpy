@@ -45,4 +45,36 @@ public final class ActivityLauncher {
             return -1;
         }
     }
+
+    /**
+     * Launch the device's default home launcher on the given display.
+     *
+     * <p>Uses {@link Intent#CATEGORY_HOME} with {@link Intent#CATEGORY_DEFAULT}
+     * so the system resolves the currently-configured home app — avoiding the
+     * client-side launcher candidate list that diverges between local and
+     * remote nodes.
+     */
+    public static int launchHome(int displayId) {
+        try {
+            Ln.i("ActivityLauncher: launchHome on display " + displayId);
+            Intent home = new Intent(Intent.ACTION_MAIN);
+            home.addCategory(Intent.CATEGORY_HOME);
+            home.addCategory(Intent.CATEGORY_DEFAULT);
+            home.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+
+            Bundle options = null;
+            if (Build.VERSION.SDK_INT >= AndroidVersions.API_26_ANDROID_8_0) {
+                ActivityOptions launchOptions = ActivityOptions.makeBasic();
+                launchOptions.setLaunchDisplayId(displayId);
+                options = launchOptions.toBundle();
+            }
+
+            int result = ServiceManager.getActivityManager().startActivity(home, options);
+            Ln.i("ActivityLauncher: launchHome result=" + result);
+            return result >= 0 ? 0 : -1;
+        } catch (Exception e) {
+            Ln.e("ActivityLauncher: failed to launch home", e);
+            return -1;
+        }
+    }
 }

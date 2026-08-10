@@ -1,6 +1,9 @@
 package com.genymobile.scrcpy.daemon.control;
 
 import com.genymobile.scrcpy.display.DisplayInfo;
+import com.genymobile.scrcpy.model.DeviceApp;
+
+import java.util.List;
 
 /**
  * Carrier for daemon-mode device response message fields.
@@ -18,6 +21,7 @@ public final class DaemonDeviceMessage {
     private int displayId;
     private int[] displayIds;
     private DisplayInfo[] displayInfos;
+    private List<DeviceApp> apps;
 
     public long getSequence() {
         return sequence;
@@ -65,5 +69,13 @@ public final class DaemonDeviceMessage {
 
     public void setDisplayInfos(DisplayInfo[] displayInfos) {
         this.displayInfos = displayInfos;
+    }
+
+    public List<DeviceApp> getApps() {
+        return apps;
+    }
+
+    public void setApps(List<DeviceApp> apps) {
+        this.apps = apps;
     }
 }

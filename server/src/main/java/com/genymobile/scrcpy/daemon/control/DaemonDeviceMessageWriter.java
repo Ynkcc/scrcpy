@@ -2,10 +2,12 @@ package com.genymobile.scrcpy.daemon.control;
 
 import com.genymobile.scrcpy.control.DeviceMessage;
 import com.genymobile.scrcpy.display.DisplayInfo;
+import com.genymobile.scrcpy.model.DeviceApp;
 
 import java.io.DataOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 
 public final class DaemonDeviceMessageWriter {
 
@@ -48,6 +50,24 @@ public final class DaemonDeviceMessageWriter {
                     dos.writeInt(info.getRotation());
                     dos.writeInt(info.getMirrorDisplayId());
                     dos.writeByte(info.isOwned() ? 1 : 0);
+                }
+                return true;
+            case DaemonDeviceMessages.TYPE_RESPONSE_APPS_LIST:
+                dos.writeLong(dto.getSequence());
+                List<DeviceApp> apps = dto.getApps();
+                if (apps == null) {
+                    dos.writeInt(0);
+                    return true;
+                }
+                dos.writeInt(apps.size());
+                for (DeviceApp app : apps) {
+                    byte[] pkgBytes = app.getPackageName().getBytes(StandardCharsets.UTF_8);
+                    dos.writeInt(pkgBytes.length);
+                    dos.write(pkgBytes);
+                    byte[] nameBytes = app.getName() != null ? app.getName().getBytes(StandardCharsets.UTF_8) : new byte[0];
+                    dos.writeInt(nameBytes.length);
+                    dos.write(nameBytes);
+                    dos.writeByte(app.isSystem() ? 1 : 0);
                 }
                 return true;
             default:
