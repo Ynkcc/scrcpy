@@ -83,18 +83,14 @@ public final class VirtualDisplayRegistry {
                 }
             }, new Handler(readerThread.getLooper()));
 
-            int finalFlags = flags;
             if (mirrorDisplayId >= 0) {
-                // 启用自动镜像: VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR = 16 (0x10)
-                finalFlags |= 16;
+                // Use the 5-arg createVirtualDisplay to mirror a specific display
+                vd = ServiceManager.getDisplayManager()
+                        .createVirtualDisplay(name, width, height, mirrorDisplayId, imageReader.getSurface());
+            } else {
+                vd = ServiceManager.getDisplayManager()
+                        .createNewVirtualDisplay(name, width, height, dpi, imageReader.getSurface(), flags);
             }
-            if ((finalFlags & 16) != 0) {
-                // 自动镜像与 OWN_CONTENT_ONLY (8) 互斥。若同时存在，OWN_CONTENT_ONLY 优先，会导致镜像失效。
-                // 必须清除 VIRTUAL_DISPLAY_FLAG_OWN_CONTENT_ONLY
-                finalFlags &= ~8;
-            }
-            vd = ServiceManager.getDisplayManager()
-                    .createNewVirtualDisplay(name, width, height, dpi, imageReader.getSurface(), finalFlags);
             int displayId = vd.getDisplay().getDisplayId();
 
             boolean powered = false;
@@ -196,41 +192,76 @@ public final class VirtualDisplayRegistry {
         synchronized (activeDisplaysLock) {
             displayUsers.computeIfAbsent(displayId, k -> new HashMap<>())
                     .merge(sessionId, 1, Integer::sum);
+            Ln.i("VirtualDisplayRegistry: acquire display id=" + displayId + " for session " + sessionId 
+                    + " (total users: " + displayUsers.get(displayId).size() + ")");
         }
     }
 
     /**
      * Release a session's reference to a virtual display. If this was the last
-     * user, the display is actually destroyed (thaw rotation, migrate tasks,
-     * {@code VirtualDisplay.release}). Otherwise it survives for remaining
-     * users — the "lossless recovery" guarantee: client A can disconnect
-     * without destroying a display that client B is still watching.
+     * user across ALL sessions, the display is actually destroyed.
      *
      * @return true if the display was destroyed, false if it still has users
      */
     public boolean release(int displayId, int sessionId) {
+        VirtualDisplaySession session = null;
         synchronized (activeDisplaysLock) {
             Map<Integer, Integer> users = displayUsers.get(displayId);
             if (users != null) {
                 Integer count = users.get(sessionId);
-                if (count != null && count > 1) {
-                    users.put(sessionId, count - 1);
-                    Ln.i("VirtualDisplayRegistry: display id=" + displayId + " session " + sessionId
-                            + " refcount " + count + " → " + (count - 1) + " — not destroyed");
-                } else {
-                    users.remove(sessionId);
+                if (count != null) {
+                    if (count > 1) {
+                        users.put(sessionId, count - 1);
+                        Ln.i("VirtualDisplayRegistry: display id=" + displayId + " session " + sessionId
+                                + " refcount " + count + " → " + (count - 1) + " (remaining)");
+                        return false;
+                    } else {
+                        users.remove(sessionId);
+                        Ln.i("VirtualDisplayRegistry: display id=" + displayId + " session " + sessionId
+                                + " released its last reference");
+                    }
                 }
+
+                if (users.isEmpty()) {
+                    displayUsers.remove(displayId);
+                    session = activeSessions.remove(displayId);
+                }
+            } else {
+                // No tracking for this display? Try cleaning up session map anyway
+                session = activeSessions.remove(displayId);
             }
         }
-        return false; // Persistent mode: do not auto-destroy on release
+
+        if (session != null) {
+            actuallyDestroy(displayId, session);
+            return true;
+        }
+        return false;
     }
 
     /**
-     * Release all virtual display references held by a session. In persistent mode,
-     * this is a no-op to preserve displays after client disconnection.
+     * Release all virtual display references held by a session.
      */
     public void releaseSession(int sessionId) {
-        Ln.i("VirtualDisplayRegistry: releaseSession " + sessionId + " (persistent mode, displays preserved)");
+        List<Integer> toDestroy = new ArrayList<>();
+        synchronized (activeDisplaysLock) {
+            for (Map.Entry<Integer, Map<Integer, Integer>> entry : displayUsers.entrySet()) {
+                int displayId = entry.getKey();
+                Map<Integer, Integer> users = entry.getValue();
+                if (users.remove(sessionId) != null) {
+                    if (users.isEmpty()) {
+                        toDestroy.add(displayId);
+                    }
+                }
+            }
+            // If display was created but not 'acquired' via tracking (e.g. legacy/error path),
+            // this loop might miss it, but standard flow always acquires.
+        }
+
+        for (int displayId : toDestroy) {
+            Ln.i("VirtualDisplayRegistry: destroying display " + displayId + " because session " + sessionId + " was the last user");
+            releaseVirtualDisplay(displayId);
+        }
     }
 
     public boolean resizeVirtualDisplay(int displayId, int width, int height, int dpi) {
@@ -350,14 +381,8 @@ public final class VirtualDisplayRegistry {
     }
 
     public int[] getActiveDisplayIds() {
-        synchronized (activeDisplaysLock) {
-            int[] ids = new int[activeSessions.size()];
-            int i = 0;
-            for (int id : activeSessions.keySet()) {
-                ids[i++] = id;
-            }
-            return ids;
-        }
+        int[] ids = ServiceManager.getDisplayManager().getDisplayIds();
+        return ids != null ? ids : new int[0];
     }
 
     /**

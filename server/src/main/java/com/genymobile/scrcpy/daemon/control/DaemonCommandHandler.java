@@ -163,8 +163,9 @@ public final class DaemonCommandHandler implements ControlMessageExtension {
 
         register(DaemonControlMessages.TYPE_RELEASE_VIRTUAL_DISPLAY, ExecutionPolicy.SLOW, (msg, ctx) -> {
             DaemonControlMessage dto = payload(msg);
-            // Persistent mode: force release the display completely when explicitly requested
-            boolean destroyed = registry.releaseVirtualDisplay(dto.getDisplayId());
+            // Persistent mode is disabled: use session-aware release to trigger destruction
+            // if this is the last session using the display.
+            boolean destroyed = registry.release(dto.getDisplayId(), sessionId);
             sendSuccessResponse(msg, dto.getDisplayId(), destroyed ? "DESTROYED" : "RELEASED");
         });
 
