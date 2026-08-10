@@ -47,9 +47,38 @@ public final class VideoSubscriber {
     private volatile boolean closed = false;
     private Thread writeThread;
 
+    /**
+     * One-shot callback invoked when the subscriber dies because the client
+     * closed its video socket (IOException in {@link #writeFrame}). Lets the
+     * owning SessionVideoController release the VD refcount immediately rather
+     * than waiting for session cleanup. Fires at most once per subscriber
+     * instance ({@code deathNotified} guard); external {@link #close()} does
+     * NOT trigger it (that path is driven by stopVideoInternal itself).
+     */
+    private volatile Runnable onDeath;
+    private final AtomicBoolean deathNotified = new AtomicBoolean(false);
+
     VideoSubscriber(int sessionId, Streamer streamer) {
         this.sessionId = sessionId;
         this.streamer = streamer;
+    }
+
+    /** Register the death callback. Must be called before {@link #start()}. */
+    public void setOnDeath(Runnable r) {
+        this.onDeath = r;
+    }
+
+    /**
+     * Fire the death callback exactly once. Called only from the natural-death
+     * path (socket IOException), never from external {@link #close()}.
+     */
+    private void notifyDeath() {
+        if (deathNotified.compareAndSet(false, true)) {
+            Runnable r = onDeath;
+            if (r != null) {
+                r.run();
+            }
+        }
     }
 
     /** Launch the dedicated write thread. Called once after construction. */
@@ -146,6 +175,10 @@ public final class VideoSubscriber {
                 Ln.w("VideoSubscriber[" + sessionId + "]: write error: " + e.getMessage());
             }
             alive.set(false);
+            // Notify the owning controller so it can release the VD refcount
+            // immediately (the socket is gone — no point keeping the display
+            // alive for a dead stream). External close() does not call this.
+            notifyDeath();
         }
     }
 

@@ -196,7 +196,10 @@ public class ScreenCapture extends SurfaceCapture {
             } else {
                 // The positions are relative to the virtual display, not the original display (so use inputSize, not deviceSize!)
                 positionMapper = PositionMapper.create(videoSize, transform, inputSize);
-                virtualDisplayId = virtualDisplay.getDisplay().getDisplayId();
+                // Always inject touch events into the ORIGINAL display (displayId)
+                // rather than the newly-created mirror virtual display, so that input
+                // reaches the user-created virtual display instead of the capture mirror.
+                virtualDisplayId = displayId;
             }
             vdListener.onNewVirtualDisplay(virtualDisplayId, positionMapper);
         }

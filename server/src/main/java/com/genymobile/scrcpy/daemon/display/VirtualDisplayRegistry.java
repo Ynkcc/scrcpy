@@ -14,11 +14,9 @@ import android.view.Surface;
 
 import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
 public final class VirtualDisplayRegistry {
 
@@ -27,12 +25,16 @@ public final class VirtualDisplayRegistry {
     private final Map<Integer, VirtualDisplaySession> activeSessions = new HashMap<>();
     private final Object activeDisplaysLock = new Object();
 
-    // Step 3 (VD 所有权): displayId → set of sessionIds currently using this
-    // display (creators + streamers). A display is only destroyed when its user
-    // set becomes empty, so a second client can keep a virtual display alive
-    // after the first client disconnects — the "lossless recovery" guarantee
-    // from refs/13 §7. Guarded by activeDisplaysLock.
-    private final Map<Integer, Set<Integer>> displayUsers = new HashMap<>();
+    // Step 3 (VD 所有权): displayId → (sessionId → refcount). Each acquire
+    // increments the per-session count; each release decrements it. The display
+    // is destroyed only when ALL sessions' counts drop to zero (i.e. the outer
+    // map becomes empty). Using a refcount per session (rather than a Set)
+    // correctly handles the case where a single session both creates the display
+    // AND streams from it: the creator's ref and the streamer's ref are tracked
+    // independently, so stopping the stream (one release) does NOT destroy the
+    // display as long as the creator's ref remains. This is the "lossless
+    // recovery" guarantee from refs/13 §7. Guarded by activeDisplaysLock.
+    private final Map<Integer, Map<Integer, Integer>> displayUsers = new HashMap<>();
 
     public VirtualDisplayRegistry() {
     }
@@ -179,13 +181,16 @@ public final class VirtualDisplayRegistry {
      * after {@link #createVirtualDisplay} (for the creator) or before
      * {@code START_VIDEO_STREAM} (for a streamer attaching to an existing VD).
      *
-     * <p>Idempotent: acquiring the same {@code (displayId, sessionId)} twice is
-     * a no-op (it's a {@link Set}), so CREATE + START_VIDEO_STREAM from the
-     * same session only counts once — a single {@link #release} is enough.
+     * <p>Each call increments the per-session refcount, so CREATE + STREAM from
+     * the same session yields a refcount of 2 — stopping the stream (one
+     * release) leaves the creator's ref intact, keeping the display alive. This
+     * is essential for re-bind: a session can close and re-open its video socket
+     * without destroying the display it created.
      */
     public void acquire(int displayId, int sessionId) {
         synchronized (activeDisplaysLock) {
-            displayUsers.computeIfAbsent(displayId, k -> new HashSet<>()).add(sessionId);
+            displayUsers.computeIfAbsent(displayId, k -> new HashMap<>())
+                    .merge(sessionId, 1, Integer::sum);
         }
     }
 
@@ -199,71 +204,28 @@ public final class VirtualDisplayRegistry {
      * @return true if the display was destroyed, false if it still has users
      */
     public boolean release(int displayId, int sessionId) {
-        VirtualDisplaySession session = null;
-        boolean shouldDestroy = false;
         synchronized (activeDisplaysLock) {
-            Set<Integer> users = displayUsers.get(displayId);
+            Map<Integer, Integer> users = displayUsers.get(displayId);
             if (users != null) {
-                users.remove(Integer.valueOf(sessionId));
-                if (users.isEmpty()) {
-                    displayUsers.remove(displayId);
-                    shouldDestroy = true;
+                Integer count = users.get(sessionId);
+                if (count != null && count > 1) {
+                    users.put(sessionId, count - 1);
+                    Ln.i("VirtualDisplayRegistry: display id=" + displayId + " session " + sessionId
+                            + " refcount " + count + " → " + (count - 1) + " — not destroyed");
                 } else {
-                    Ln.i("VirtualDisplayRegistry: display id=" + displayId + " still has " + users.size()
-                            + " user(s) after release by session " + sessionId + " — not destroyed");
-                    return false;
+                    users.remove(sessionId);
                 }
-            } else {
-                // No users tracked for this display — best-effort force destroy.
-                shouldDestroy = true;
-            }
-            if (shouldDestroy) {
-                // Atomically claim the session for destruction while still
-                // holding the lock, so a concurrent acquire() can't sneak in
-                // between "decide to destroy" and "remove from activeSessions".
-                session = activeSessions.remove(displayId);
             }
         }
-        if (session != null) {
-            return actuallyDestroy(displayId, session);
-        }
-        if (shouldDestroy) {
-            Ln.w("VirtualDisplayRegistry: release(" + displayId + ", session=" + sessionId
-                    + ") — not in activeSessions, best-effort orphan release");
-            return DisplayCompat.bestEffortReleaseOrphan(displayId);
-        }
-        return false;
+        return false; // Persistent mode: do not auto-destroy on release
     }
 
     /**
-     * Release all virtual display references held by a session. Called from
-     * {@code ClientSession.cleanup()} so that a disconnecting client never
-     * orphans displays it created or was streaming. Displays that become
-     * userless as a result are destroyed; displays with remaining users
-     * survive.
+     * Release all virtual display references held by a session. In persistent mode,
+     * this is a no-op to preserve displays after client disconnection.
      */
     public void releaseSession(int sessionId) {
-        List<Integer> toDestroy = new ArrayList<>();
-        synchronized (activeDisplaysLock) {
-            for (Iterator<Map.Entry<Integer, Set<Integer>>> it = displayUsers.entrySet().iterator(); it.hasNext();) {
-                Map.Entry<Integer, Set<Integer>> entry = it.next();
-                if (entry.getValue().remove(Integer.valueOf(sessionId)) && entry.getValue().isEmpty()) {
-                    toDestroy.add(entry.getKey());
-                    it.remove();
-                }
-            }
-        }
-        for (int displayId : toDestroy) {
-            VirtualDisplaySession session;
-            synchronized (activeDisplaysLock) {
-                session = activeSessions.remove(displayId);
-            }
-            if (session != null) {
-                actuallyDestroy(displayId, session);
-            }
-        }
-        Ln.i("VirtualDisplayRegistry: released all refs for session " + sessionId
-                + " (" + toDestroy.size() + " display(s) destroyed)");
+        Ln.i("VirtualDisplayRegistry: releaseSession " + sessionId + " (persistent mode, displays preserved)");
     }
 
     public boolean resizeVirtualDisplay(int displayId, int width, int height, int dpi) {

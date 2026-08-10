@@ -149,6 +149,14 @@ public final class SessionVideoController implements VideoController {
             currentSubscriber = broadcasterRegistry.acquireSubscriber(
                     displayId, sessionId, videoBinding.getVideoFd(),
                     options, baseArgs, controller);
+            // Register a one-shot death callback so that when the client closes
+            // its video socket (write thread IOException), we immediately release
+            // the VD refcount + reset state — a subsequent re-bind can then
+            // start a fresh stream. Capture the subscriber reference so the
+            // callback can guard against killing a newer subscriber that has
+            // since replaced this one (re-bind race).
+            final VideoSubscriber capturedSubscriber = currentSubscriber;
+            currentSubscriber.setOnDeath(() -> onSubscriberDied(capturedSubscriber));
             videoStarted.set(true);
             Ln.i("Session[" + sessionId + "]: video stream started for displayId=" + displayId);
             return true;
@@ -157,6 +165,27 @@ public final class SessionVideoController implements VideoController {
             videoStarted.set(false);
             stopVideoInternal();
             return false;
+        }
+    }
+
+    /**
+     * Called (once) from the subscriber's write thread when the client video
+     * socket dies. Releases the VD refcount + subscriber so the display can be
+     * destroyed if no other session holds it, and so a re-bind can start fresh.
+     *
+     * <p>Guarded by {@code currentSubscriber == deadSub} so that a stale
+     * callback from an already-replaced subscriber does not tear down a newer
+     * stream (re-bind replaces the subscriber under the same lock this method
+     * acquires).
+     */
+    private synchronized void onSubscriberDied(VideoSubscriber deadSub) {
+        if (currentSubscriber == deadSub) {
+            Ln.i("Session[" + sessionId + "]: video subscriber died (displayId=" + displayId
+                    + "), releasing VD ref + resetting stream state");
+            stopVideoInternal();
+        } else {
+            Ln.i("Session[" + sessionId + "]: stale subscriber died (displayId=" + displayId
+                    + ") — already replaced by re-bind, skipping teardown");
         }
     }
 
@@ -208,6 +237,17 @@ public final class SessionVideoController implements VideoController {
     public void bindVideoSocket(Socket socket) {
         synchronized (this) {
             try {
+                // If a previous stream is still marked active (client closed
+                // socket but the death callback hasn't fired yet, or this is an
+                // explicit re-bind), stop it first so the new socket gets a
+                // fresh subscriber + fresh VD acquire. Without this,
+                // startVideoStreamInternal sees videoStarted=true and returns
+                // early, leaving the new socket with no subscriber (0 bytes).
+                if (videoStarted.get()) {
+                    Ln.i("Session[" + sessionId + "]: re-bind video socket for displayId=" + displayId
+                            + ", stopping previous stream first");
+                    stopVideoInternal();
+                }
                 videoBinding.bindVideoSocket(socket);
                 Ln.i("Session[" + sessionId + "]: video socket bound for displayId=" + displayId
                         + ", auto-starting stream");
