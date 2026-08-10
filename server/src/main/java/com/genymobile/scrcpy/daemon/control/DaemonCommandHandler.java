@@ -155,17 +155,17 @@ public final class DaemonCommandHandler implements ControlMessageExtension {
             if (newDisplayId == -1) {
                 throw new RuntimeException("FAILED");
             }
-            // Step 3: the creator is the first user. The VD will only be
-            // destroyed when all users (creators + streamers) release it.
+            // Make the display persistent by default: acquire a reference for the 
+            // daemon itself (-1) and the current session.
+            registry.acquire(newDisplayId, VirtualDisplayRegistry.PERSISTENT_SESSION_ID);
             registry.acquire(newDisplayId, sessionId);
             sendSuccessResponse(msg, newDisplayId, "OK");
         });
 
         register(DaemonControlMessages.TYPE_RELEASE_VIRTUAL_DISPLAY, ExecutionPolicy.SLOW, (msg, ctx) -> {
             DaemonControlMessage dto = payload(msg);
-            // Persistent mode is disabled: use session-aware release to trigger destruction
-            // if this is the last session using the display.
-            boolean destroyed = registry.release(dto.getDisplayId(), sessionId);
+            // User explicitly requested release: perform a force-destroy.
+            boolean destroyed = registry.releaseVirtualDisplay(dto.getDisplayId());
             sendSuccessResponse(msg, dto.getDisplayId(), destroyed ? "DESTROYED" : "RELEASED");
         });
 

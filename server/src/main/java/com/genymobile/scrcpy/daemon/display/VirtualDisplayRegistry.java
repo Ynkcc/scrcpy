@@ -20,6 +20,8 @@ import java.util.Map;
 
 public final class VirtualDisplayRegistry {
 
+    public static final int PERSISTENT_SESSION_ID = -1;
+
     private static final int IMAGE_READER_MAX_IMAGES = 5; // larger buffer to reduce frame drops
 
     private final Map<Integer, VirtualDisplaySession> activeSessions = new HashMap<>();
@@ -101,8 +103,6 @@ public final class VirtualDisplayRegistry {
                 Ln.w("VirtualDisplayRegistry: requestDisplayPower not supported on this device/Android version: " + t.getMessage());
             }
 
-            // Isolate virtual display rotation
-            freezeRotationWithRetry(displayId, Surface.ROTATION_0);
 
             VirtualDisplaySession session = new VirtualDisplaySession(displayId, name, vd, imageReader, readerThread, mirrorDisplayId);
             synchronized (activeDisplaysLock) {
