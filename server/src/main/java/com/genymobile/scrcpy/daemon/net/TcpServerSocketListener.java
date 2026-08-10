@@ -45,13 +45,6 @@ public final class TcpServerSocketListener {
             addressesToBind.add("127.0.0.1");
         }
 
-        // 如果用户指定的地址不是 127.0.0.1 / localhost / 0.0.0.0，则始终追加 127.0.0.1
-        if (bindAddress != null && !bindAddress.equals("127.0.0.1") 
-                && !bindAddress.equalsIgnoreCase("localhost") 
-                && !bindAddress.equals("0.0.0.0")) {
-            addressesToBind.add("127.0.0.1");
-        }
-
         for (String addr : addressesToBind) {
             try {
                 ServerSocket ss = new ServerSocket();

@@ -282,6 +282,10 @@ public final class DaemonCommandHandler implements ControlMessageExtension {
                 ctx.getSender().send(response);
             }
         });
+
+        register(DaemonControlMessages.TYPE_PING, ExecutionPolicy.FAST, (msg, ctx) -> {
+            sendSuccessResponse(msg, -1, "PONG");
+        });
     }
 
     @Override

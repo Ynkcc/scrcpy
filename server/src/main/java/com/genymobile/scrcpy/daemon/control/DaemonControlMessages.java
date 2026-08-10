@@ -43,6 +43,10 @@ public final class DaemonControlMessages {
     // identically for both local and remote nodes.
     public static final int TYPE_LIST_APPS = 218;
 
+    // Ping request to measure RTT. Server replies with TYPE_RESPONSE_GENERIC
+    // echoing the sequence number.
+    public static final int TYPE_PING = 219;
+
     private DaemonControlMessages() {
     }
 
@@ -183,5 +187,11 @@ public final class DaemonControlMessages {
         DaemonControlMessage dto = new DaemonControlMessage();
         dto.setSequence(sequence);
         return envelope(TYPE_LIST_APPS, dto);
+    }
+
+    public static ControlMessage createPing(long sequence) {
+        DaemonControlMessage dto = new DaemonControlMessage();
+        dto.setSequence(sequence);
+        return envelope(TYPE_PING, dto);
     }
 }

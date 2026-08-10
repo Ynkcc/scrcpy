@@ -41,6 +41,8 @@ public final class DaemonControlMessageReader {
                 return DaemonControlMessages.createLaunchHome(dis.readLong(), dis.readInt());
             case DaemonControlMessages.TYPE_LIST_APPS:
                 return DaemonControlMessages.createListApps(dis.readLong());
+            case DaemonControlMessages.TYPE_PING:
+                return DaemonControlMessages.createPing(dis.readLong());
             default:
                 return null;
         }
