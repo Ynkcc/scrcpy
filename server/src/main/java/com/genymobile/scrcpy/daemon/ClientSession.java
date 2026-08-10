@@ -291,7 +291,12 @@ public final class ClientSession implements Runnable, SessionConfigurator {
                         }
                     }
                 }
-                controller = new Controller(ch, null, sessionOptions, displayId);
+                int mirrorId = -1;
+                com.genymobile.scrcpy.daemon.display.VirtualDisplaySession vdSession = registry.getSession(displayId);
+                if (vdSession != null) {
+                    mirrorId = vdSession.getMirrorDisplayId();
+                }
+                controller = new Controller(ch, null, sessionOptions, displayId, mirrorId);
 
                 // 职责去重: swallow daemon commands on control channel; only
                 // the negotiation channel carries them.

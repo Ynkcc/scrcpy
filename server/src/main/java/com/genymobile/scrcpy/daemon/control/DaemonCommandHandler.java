@@ -150,7 +150,7 @@ public final class DaemonCommandHandler implements ControlMessageExtension {
         register(DaemonControlMessages.TYPE_CREATE_VIRTUAL_DISPLAY, ExecutionPolicy.SLOW, (msg, ctx) -> {
             DaemonControlMessage dto = payload(msg);
             int newDisplayId = registry.createVirtualDisplay(
-                    dto.getText(), dto.getWidth(), dto.getHeight(), dto.getDpi(), dto.getFlags());
+                    dto.getText(), dto.getWidth(), dto.getHeight(), dto.getDpi(), dto.getFlags(), dto.getDisplayId());
             if (newDisplayId == -1) {
                 throw new RuntimeException("FAILED");
             }

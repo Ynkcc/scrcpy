@@ -10,10 +10,16 @@ public final class DisplayInfo {
     private final int flags;
     private final int dpi;
     private final String uniqueId;
+    private final int mirrorDisplayId;
+    private final boolean owned;
 
     public static final int FLAG_SUPPORTS_PROTECTED_BUFFERS = 0x00000001;
 
     public DisplayInfo(int displayId, Size size, int rotation, int layerStack, int flags, int dpi, String uniqueId) {
+        this(displayId, size, rotation, layerStack, flags, dpi, uniqueId, -1, false);
+    }
+
+    public DisplayInfo(int displayId, Size size, int rotation, int layerStack, int flags, int dpi, String uniqueId, int mirrorDisplayId, boolean owned) {
         this.displayId = displayId;
         this.size = size;
         this.rotation = rotation;
@@ -21,6 +27,8 @@ public final class DisplayInfo {
         this.flags = flags;
         this.dpi = dpi;
         this.uniqueId = uniqueId;
+        this.mirrorDisplayId = mirrorDisplayId;
+        this.owned = owned;
     }
 
     public int getDisplayId() {
@@ -49,5 +57,13 @@ public final class DisplayInfo {
 
     public String getUniqueId() {
         return uniqueId;
+    }
+
+    public int getMirrorDisplayId() {
+        return mirrorDisplayId;
+    }
+
+    public boolean isOwned() {
+        return owned;
     }
 }

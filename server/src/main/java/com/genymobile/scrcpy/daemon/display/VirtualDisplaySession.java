@@ -13,17 +13,28 @@ public final class VirtualDisplaySession implements AutoCloseable {
     private final String name;
     private final VirtualDisplay virtualDisplay;
     private final HandlerThread readerThread;
+    private final int mirrorDisplayId;
     
     private ImageReader imageReader;
     private Surface externalSurface;
 
     public VirtualDisplaySession(int displayId, String name, VirtualDisplay virtualDisplay, 
                                  ImageReader imageReader, HandlerThread readerThread) {
+        this(displayId, name, virtualDisplay, imageReader, readerThread, -1);
+    }
+
+    public VirtualDisplaySession(int displayId, String name, VirtualDisplay virtualDisplay, 
+                                 ImageReader imageReader, HandlerThread readerThread, int mirrorDisplayId) {
         this.displayId = displayId;
         this.name = name;
         this.virtualDisplay = virtualDisplay;
         this.imageReader = imageReader;
         this.readerThread = readerThread;
+        this.mirrorDisplayId = mirrorDisplayId;
+    }
+
+    public int getMirrorDisplayId() {
+        return mirrorDisplayId;
     }
 
     public int getDisplayId() {

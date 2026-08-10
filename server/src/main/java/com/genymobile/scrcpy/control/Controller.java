@@ -87,6 +87,7 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
 
     private final boolean camera;
     private final int displayId;
+    private final int mirrorDisplayId;
     private final boolean supportsInputEvents;
     private final ControlChannel controlChannel;
     private final CleanUp cleanUp;
@@ -119,10 +120,14 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
     }
 
     public Controller(ControlChannel controlChannel, CleanUp cleanUp, Options options) {
-        this(controlChannel, cleanUp, options, options.getDisplayId());
+        this(controlChannel, cleanUp, options, options.getDisplayId(), -1);
     }
 
     public Controller(ControlChannel controlChannel, CleanUp cleanUp, Options options, int displayId) {
+        this(controlChannel, cleanUp, options, displayId, -1);
+    }
+
+    public Controller(ControlChannel controlChannel, CleanUp cleanUp, Options options, int displayId, int mirrorDisplayId) {
         this.camera = options.getVideoSource() == VideoSource.CAMERA;
         this.controlChannel = controlChannel;
         this.cleanUp = cleanUp;
@@ -130,6 +135,7 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
         if (this.camera) {
             // Unused for camera
             this.displayId = Device.DISPLAY_ID_NONE;
+            this.mirrorDisplayId = -1;
             this.supportsInputEvents = false;
             this.sender = null;
             this.clipboardAutosync = false;
@@ -139,6 +145,7 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
         }
 
         this.displayId = displayId;
+        this.mirrorDisplayId = mirrorDisplayId;
 
         this.clipboardAutosync = options.getClipboardAutosync();
         this.powerOn = options.getPowerOn();
@@ -530,6 +537,10 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
             targetDisplayId = displayId;
         }
 
+        if (mirrorDisplayId >= 0) {
+            targetDisplayId = mirrorDisplayId;
+        }
+
         return Pair.create(point, targetDisplayId);
     }
 
@@ -772,6 +783,9 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
     }
 
     private int getActionDisplayId() {
+        if (mirrorDisplayId >= 0) {
+            return mirrorDisplayId;
+        }
         if (displayId != Device.DISPLAY_ID_NONE) {
             // Real screen mirrored, use the source display id
             return displayId;

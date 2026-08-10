@@ -59,11 +59,15 @@ public final class VirtualDisplayRegistry {
     }
 
     public int createVirtualDisplay(String name, int width, int height, int dpi, int flags) {
+        return createVirtualDisplay(name, width, height, dpi, flags, -1);
+    }
+
+    public int createVirtualDisplay(String name, int width, int height, int dpi, int flags, int mirrorDisplayId) {
         VirtualDisplay vd = null;
         ImageReader imageReader = null;
         HandlerThread readerThread = null;
         try {
-            Ln.i("VirtualDisplayRegistry: createVirtualDisplay name=" + name + ", width=" + width + ", height=" + height + ", dpi=" + dpi + ", flags=0x" + Integer.toHexString(flags));
+            Ln.i("VirtualDisplayRegistry: createVirtualDisplay name=" + name + ", width=" + width + ", height=" + height + ", dpi=" + dpi + ", flags=0x" + Integer.toHexString(flags) + ", mirrorDisplayId=" + mirrorDisplayId);
 
             readerThread = new HandlerThread("VDReader-" + name);
             readerThread.start();
@@ -79,8 +83,18 @@ public final class VirtualDisplayRegistry {
                 }
             }, new Handler(readerThread.getLooper()));
 
+            int finalFlags = flags;
+            if (mirrorDisplayId >= 0) {
+                // 启用自动镜像: VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR = 16 (0x10)
+                finalFlags |= 16;
+            }
+            if ((finalFlags & 16) != 0) {
+                // 自动镜像与 OWN_CONTENT_ONLY (8) 互斥。若同时存在，OWN_CONTENT_ONLY 优先，会导致镜像失效。
+                // 必须清除 VIRTUAL_DISPLAY_FLAG_OWN_CONTENT_ONLY
+                finalFlags &= ~8;
+            }
             vd = ServiceManager.getDisplayManager()
-                    .createNewVirtualDisplay(name, width, height, dpi, imageReader.getSurface(), flags);
+                    .createNewVirtualDisplay(name, width, height, dpi, imageReader.getSurface(), finalFlags);
             int displayId = vd.getDisplay().getDisplayId();
 
             boolean powered = false;
@@ -91,19 +105,10 @@ public final class VirtualDisplayRegistry {
                 Ln.w("VirtualDisplayRegistry: requestDisplayPower not supported on this device/Android version: " + t.getMessage());
             }
 
-            // Isolate virtual display rotation: freeze the initial orientation so that
-            // (a) the main screen rotation never rotates the virtual display, and
-            // (b) rotation requests inside the virtual display never propagate to the main screen or this app.
-            // Use the initial natural rotation (ROTATION_0) as the frozen orientation.
-            //
-            // The WindowManager may not have registered the newly-created display yet
-            // when freezeRotation() is invoked here; that call would then silently fail
-            // (the exception is caught inside WindowManager.freezeRotation()). Verify
-            // with isRotationFrozen() and retry a few times to bridge the registration
-            // race. See RotationController / TYPE_IS_ROTATION_FROZEN for the query path.
+            // Isolate virtual display rotation
             freezeRotationWithRetry(displayId, Surface.ROTATION_0);
 
-            VirtualDisplaySession session = new VirtualDisplaySession(displayId, name, vd, imageReader, readerThread);
+            VirtualDisplaySession session = new VirtualDisplaySession(displayId, name, vd, imageReader, readerThread, mirrorDisplayId);
             synchronized (activeDisplaysLock) {
                 activeSessions.put(displayId, session);
             }
@@ -365,20 +370,36 @@ public final class VirtualDisplayRegistry {
      *         whose DisplayInfo cannot be resolved are omitted
      */
     public com.genymobile.scrcpy.display.DisplayInfo[] getActiveDisplayInfos() {
-        int[] ids;
-        synchronized (activeDisplaysLock) {
-            ids = new int[activeSessions.size()];
-            int i = 0;
-            for (int id : activeSessions.keySet()) {
-                ids[i++] = id;
-            }
+        int[] ids = ServiceManager.getDisplayManager().getDisplayIds();
+        if (ids == null) {
+            ids = new int[0];
         }
         java.util.List<com.genymobile.scrcpy.display.DisplayInfo> result = new java.util.ArrayList<>(ids.length);
         for (int id : ids) {
             try {
                 com.genymobile.scrcpy.display.DisplayInfo info = ServiceManager.getDisplayManager().getDisplayInfo(id);
                 if (info != null) {
-                    result.add(info);
+                    int mirrorDisplayId = -1;
+                    boolean owned = false;
+                    synchronized (activeDisplaysLock) {
+                        VirtualDisplaySession session = activeSessions.get(id);
+                        if (session != null) {
+                            mirrorDisplayId = session.getMirrorDisplayId();
+                            owned = true;
+                        }
+                    }
+                    com.genymobile.scrcpy.display.DisplayInfo enrichedInfo = new com.genymobile.scrcpy.display.DisplayInfo(
+                        info.getDisplayId(),
+                        info.getSize(),
+                        info.getRotation(),
+                        info.getLayerStack(),
+                        info.getFlags(),
+                        info.getDpi(),
+                        info.getUniqueId(),
+                        mirrorDisplayId,
+                        owned
+                    );
+                    result.add(enrichedInfo);
                 } else {
                     Ln.w("VirtualDisplayRegistry: getDisplayInfo returned null for displayId=" + id);
                 }

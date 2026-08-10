@@ -46,6 +46,8 @@ public final class DaemonDeviceMessageWriter {
                     dos.writeInt(info.getSize().getHeight());
                     dos.writeInt(info.getDpi());
                     dos.writeInt(info.getRotation());
+                    dos.writeInt(info.getMirrorDisplayId());
+                    dos.writeByte(info.isOwned() ? 1 : 0);
                 }
                 return true;
             default:

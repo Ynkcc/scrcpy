@@ -66,7 +66,12 @@ public final class DaemonControlMessageReader {
         int height = dis.readInt();
         int dpi = dis.readInt();
         int flags = dis.readInt();
-        return DaemonControlMessages.createCreateVirtualDisplay(sequence, name, width, height, dpi, flags);
+        int displayId = -1;
+        try {
+            displayId = dis.readInt();
+        } catch (Exception ignored) {
+        }
+        return DaemonControlMessages.createCreateVirtualDisplay(sequence, name, width, height, dpi, flags, displayId);
     }
 
     private static ControlMessage parseReleaseVirtualDisplay(DataInputStream dis) throws IOException {

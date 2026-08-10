@@ -46,6 +46,10 @@ public final class DaemonControlMessages {
     }
 
     public static ControlMessage createCreateVirtualDisplay(long sequence, String name, int width, int height, int dpi, int flags) {
+        return createCreateVirtualDisplay(sequence, name, width, height, dpi, flags, -1);
+    }
+
+    public static ControlMessage createCreateVirtualDisplay(long sequence, String name, int width, int height, int dpi, int flags, int displayId) {
         DaemonControlMessage dto = new DaemonControlMessage();
         dto.setSequence(sequence);
         dto.setText(name);
@@ -53,6 +57,7 @@ public final class DaemonControlMessages {
         dto.setHeight(height);
         dto.setDpi(dpi);
         dto.setFlags(flags);
+        dto.setDisplayId(displayId);
         return envelope(TYPE_CREATE_VIRTUAL_DISPLAY, dto);
     }
 
