@@ -7,6 +7,7 @@ public class DaemonOptions {
     private int port = -1;
     private boolean daemonMode = false;
     private String bindAddress = "127.0.0.1";
+    private String secretToken = null;
 
     public DaemonOptions() {
     }
@@ -17,7 +18,7 @@ public class DaemonOptions {
             return opts;
         }
         // 与 scrcpy 原生参数一致，统一采用 key=value 形式：
-        //   daemon=true  daemon_port=27183  daemon_bind_address=127.0.0.1
+        //   daemon=true  daemon_port=27183  daemon_bind_address=127.0.0.1 daemon_secret_token=xyz
         for (String arg : args) {
             int eq = arg.indexOf('=');
             if (eq == -1) {
@@ -44,6 +45,11 @@ public class DaemonOptions {
                 case "daemon_bind_address":
                     if (!value.isEmpty()) {
                         opts.bindAddress = value;
+                    }
+                    break;
+                case "daemon_secret_token":
+                    if (!value.isEmpty()) {
+                        opts.secretToken = value;
                     }
                     break;
                 default:
@@ -75,5 +81,13 @@ public class DaemonOptions {
 
     public void setBindAddress(String bindAddress) {
         this.bindAddress = bindAddress;
+    }
+
+    public String getSecretToken() {
+        return secretToken;
+    }
+
+    public void setSecretToken(String secretToken) {
+        this.secretToken = secretToken;
     }
 }

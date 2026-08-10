@@ -74,17 +74,7 @@ public final class DaemonCommandHandler implements ControlMessageExtension {
             final int id = ++counter;
             Thread t = new Thread(() -> {
                 android.os.Looper.prepare();
-                try {
-                    r.run();
-                } finally {
-                    // Best-effort quit the looper we prepared. The worker thread
-                    // is likely pooled and will be reused; quitting clears any
-                    // pending messages so unrelated tasks do not see leftovers.
-                    android.os.Looper looper = android.os.Looper.myLooper();
-                    if (looper != null) {
-                        looper.quitSafely();
-                    }
-                }
+                r.run();
             }, namePrefix + "-" + id);
             t.setDaemon(true);
             return t;

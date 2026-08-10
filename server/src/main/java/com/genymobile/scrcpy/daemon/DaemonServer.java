@@ -13,6 +13,7 @@ import com.genymobile.scrcpy.util.Ln;
 import java.io.IOException;
 import java.net.Socket;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -37,6 +38,9 @@ public final class DaemonServer {
     private final DaemonExitCoordinator exitCoordinator;
     private final FrameBroadcasterRegistry broadcasterRegistry;
 
+    private final String secretToken;
+    private final Set<String> blacklistedIps = ConcurrentHashMap.newKeySet();
+
     private ExecutorService acceptExecutor;
     private ExecutorService clientExecutor;
 
@@ -48,6 +52,13 @@ public final class DaemonServer {
         this.surfaceBroker = new DisplaySurfaceBroker(registry);
         this.exitCoordinator = new DaemonExitCoordinator(this);
         this.broadcasterRegistry = new FrameBroadcasterRegistry(surfaceBroker);
+
+        String token = daemonOptions.getSecretToken();
+        if ("auto".equalsIgnoreCase(token)) {
+            token = java.util.UUID.randomUUID().toString().replace("-", "").substring(0, 16);
+            Ln.i(">>> AUTOMATIC DAEMON SECRET TOKEN GENERATED: " + token + " <<<");
+        }
+        this.secretToken = token;
     }
 
     public void run() throws IOException {
@@ -91,6 +102,12 @@ public final class DaemonServer {
         while (running.get()) {
             try {
                 Socket socket = TcpServerSocketListener.acceptNextSocket();
+                String ip = socket.getInetAddress().getHostAddress();
+                if (blacklistedIps.contains(ip)) {
+                    Ln.w("Connection rejected from blacklisted IP: " + ip);
+                    socket.close();
+                    continue;
+                }
                 int role;
                 try {
                     role = TcpDesktopConnection.readSocketRole(socket);
@@ -141,6 +158,24 @@ public final class DaemonServer {
                 Ln.d("Failed to close negotiation socket after sessionId write failure: " + closeEx.getMessage());
             }
             return;
+        }
+
+        if (secretToken != null) {
+            try {
+                if (!authenticate(socket, secretToken)) {
+                    String ip = socket.getInetAddress().getHostAddress();
+                    blacklistedIps.add(ip);
+                    Ln.w("Authentication failed for IP: " + ip + ". IP blacklisted.");
+                    try { socket.close(); } catch (IOException ignored) {}
+                    return;
+                }
+            } catch (Exception e) {
+                String ip = socket.getInetAddress().getHostAddress();
+                blacklistedIps.add(ip);
+                Ln.w("Authentication error for IP: " + ip + ". IP blacklisted. Error: " + e.getMessage());
+                try { socket.close(); } catch (IOException ignored) {}
+                return;
+            }
         }
 
         ClientSession session;
@@ -264,5 +299,31 @@ public final class DaemonServer {
     void removeSession(int sessionId) {
         sessions.remove(sessionId);
         Ln.i("DaemonServer: session " + sessionId + " removed");
+    }
+
+    private boolean authenticate(Socket socket, String expectedToken) throws IOException {
+        java.io.InputStream in = socket.getInputStream();
+        int b1 = in.read();
+        int b2 = in.read();
+        int b3 = in.read();
+        int b4 = in.read();
+        if (b1 < 0 || b2 < 0 || b3 < 0 || b4 < 0) {
+            return false;
+        }
+        int len = (b1 << 24) | (b2 << 16) | (b3 << 8) | b4;
+        if (len < 0 || len > 1024) {
+            return false;
+        }
+        byte[] buf = new byte[len];
+        int read = 0;
+        while (read < len) {
+            int r = in.read(buf, read, len - read);
+            if (r < 0) {
+                return false;
+            }
+            read += r;
+        }
+        String clientToken = new String(buf, java.nio.charset.StandardCharsets.UTF_8);
+        return expectedToken.equals(clientToken);
     }
 }

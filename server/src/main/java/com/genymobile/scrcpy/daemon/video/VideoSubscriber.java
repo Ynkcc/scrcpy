@@ -93,17 +93,15 @@ public final class VideoSubscriber {
      * @return {@code true} if a droppable frame was found and removed
      */
     private boolean evictOldestDroppable() {
-        List<Frame> snapshot = new ArrayList<>(QUEUE_CAPACITY);
-        queue.drainTo(snapshot);
-        boolean dropped = false;
-        for (Frame f : snapshot) {
-            if (!dropped && f.isDroppable()) {
-                dropped = true; // skip (drop) this one
-                continue;
+        java.util.Iterator<Frame> it = queue.iterator();
+        while (it.hasNext()) {
+            Frame f = it.next();
+            if (f.isDroppable()) {
+                it.remove();
+                return true;
             }
-            queue.offer(f);
         }
-        return dropped;
+        return false;
     }
 
     private void writeLoop() {

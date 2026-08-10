@@ -212,6 +212,20 @@ public final class ClientSession implements Runnable, SessionConfigurator {
     // -----------------------------------------------------------------------
 
     private boolean acceptRoleSocket(int role, int displayId) {
+        if (phase == PHASE_INIT) {
+            synchronized (phaseLock) {
+                long timeout = 2000;
+                long start = System.currentTimeMillis();
+                while (phase == PHASE_INIT && (System.currentTimeMillis() - start) < timeout) {
+                    try {
+                        phaseLock.wait(timeout - (System.currentTimeMillis() - start));
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        break;
+                    }
+                }
+            }
+        }
         if (phase != PHASE_CONFIGURED) {
             Ln.w("Session[" + sessionId + "]: rejecting role socket — phase="
                     + phaseName(phase) + " (must complete CONFIGURE_SESSION first)");
