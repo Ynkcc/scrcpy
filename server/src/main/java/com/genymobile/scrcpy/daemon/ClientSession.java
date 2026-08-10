@@ -291,7 +291,7 @@ public final class ClientSession implements Runnable, SessionConfigurator {
                         }
                     }
                 }
-                controller = new Controller(ch, null, sessionOptions);
+                controller = new Controller(ch, null, sessionOptions, displayId);
 
                 // 职责去重: swallow daemon commands on control channel; only
                 // the negotiation channel carries them.

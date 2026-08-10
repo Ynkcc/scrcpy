@@ -119,6 +119,10 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
     }
 
     public Controller(ControlChannel controlChannel, CleanUp cleanUp, Options options) {
+        this(controlChannel, cleanUp, options, options.getDisplayId());
+    }
+
+    public Controller(ControlChannel controlChannel, CleanUp cleanUp, Options options, int displayId) {
         this.camera = options.getVideoSource() == VideoSource.CAMERA;
         this.controlChannel = controlChannel;
         this.cleanUp = cleanUp;
@@ -134,7 +138,7 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
             return;
         }
 
-        this.displayId = options.getDisplayId();
+        this.displayId = displayId;
 
         this.clipboardAutosync = options.getClipboardAutosync();
         this.powerOn = options.getPowerOn();
@@ -142,7 +146,7 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
         initPointers();
         sender = new DeviceMessageSender(controlChannel);
 
-        supportsInputEvents = Device.supportsInputEvents(displayId);
+        supportsInputEvents = Device.supportsInputEvents(this.displayId);
         if (!supportsInputEvents) {
             Ln.w("Input events are not supported for secondary displays before Android 10");
         }
