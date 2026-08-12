@@ -1,0 +1,11 @@
+diff --git a/server/.gitignore b/server/.gitignore
+index 0df7064d..ba2e5421 100644
+--- a/server/.gitignore
++++ b/server/.gitignore
+@@ -6,3 +6,5 @@
+ /build
+ /captures
+ .externalNativeBuild
++refs/
++.trae/
+\ No newline at end of file

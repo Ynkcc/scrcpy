@@ -1,0 +1,113 @@
+diff --git a/server/src/main/java/com/genymobile/scrcpy/control/Controller.java b/server/src/main/java/com/genymobile/scrcpy/control/Controller.java
+index 55d6e11b..50d2c794 100644
+--- a/server/src/main/java/com/genymobile/scrcpy/control/Controller.java
++++ b/server/src/main/java/com/genymobile/scrcpy/control/Controller.java
+@@ -87,6 +87,7 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
+ 
+     private final boolean camera;
+     private final int displayId;
++    private final int mirrorDisplayId;
+     private final boolean supportsInputEvents;
+     private final ControlChannel controlChannel;
+     private final CleanUp cleanUp;
+@@ -110,9 +111,23 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
+     private boolean keepDisplayPowerOff;
+ 
+     // Used for resetting video encoding on RESET_VIDEO message or for sending camera controls
+-    private SurfaceCapture surfaceCapture;
++    // Volatile: written from video lifecycle threads, read from control-recv/command threads.
++    private volatile SurfaceCapture surfaceCapture;
++    private volatile ControlMessageExtension extension;
++
++    public void setControlMessageExtension(ControlMessageExtension extension) {
++        this.extension = extension;
++    }
+ 
+     public Controller(ControlChannel controlChannel, CleanUp cleanUp, Options options) {
++        this(controlChannel, cleanUp, options, options.getDisplayId(), -1);
++    }
++
++    public Controller(ControlChannel controlChannel, CleanUp cleanUp, Options options, int displayId) {
++        this(controlChannel, cleanUp, options, displayId, -1);
++    }
++
++    public Controller(ControlChannel controlChannel, CleanUp cleanUp, Options options, int displayId, int mirrorDisplayId) {
+         this.camera = options.getVideoSource() == VideoSource.CAMERA;
+         this.controlChannel = controlChannel;
+         this.cleanUp = cleanUp;
+@@ -120,6 +135,7 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
+         if (this.camera) {
+             // Unused for camera
+             this.displayId = Device.DISPLAY_ID_NONE;
++            this.mirrorDisplayId = -1;
+             this.supportsInputEvents = false;
+             this.sender = null;
+             this.clipboardAutosync = false;
+@@ -128,7 +144,8 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
+             return;
+         }
+ 
+-        this.displayId = options.getDisplayId();
++        this.displayId = displayId;
++        this.mirrorDisplayId = mirrorDisplayId;
+ 
+         this.clipboardAutosync = options.getClipboardAutosync();
+         this.powerOn = options.getPowerOn();
+@@ -136,7 +153,7 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
+         initPointers();
+         sender = new DeviceMessageSender(controlChannel);
+ 
+-        supportsInputEvents = Device.supportsInputEvents(displayId);
++        supportsInputEvents = Device.supportsInputEvents(this.displayId);
+         if (!supportsInputEvents) {
+             Ln.w("Input events are not supported for secondary displays before Android 10");
+         }
+@@ -179,6 +196,16 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
+         this.surfaceCapture = surfaceCapture;
+     }
+ 
++    // 供 daemon 模式复用 Controller 内部的 DeviceMessageSender，避免反射访问私有字段
++    public DeviceMessageSender getDeviceMessageSender() {
++        return sender;
++    }
++
++    // 供 daemon 模式在切换投屏源时获取当前 SurfaceCapture，避免反射访问私有字段
++    public SurfaceCapture getSurfaceCapture() {
++        return surfaceCapture;
++    }
++
+     private UhidManager getUhidManager() {
+         if (uhidManager == null) {
+             int uhidDisplayId = displayId;
+@@ -437,6 +464,10 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
+             }
+         }
+ 
++        if (extension != null && extension.handle(msg)) {
++            return true;
++        }
++
+         throw new AssertionError("Unexpected message type: " + type);
+     }
+ 
+@@ -506,6 +537,10 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
+             targetDisplayId = displayId;
+         }
+ 
++        if (mirrorDisplayId >= 0) {
++            targetDisplayId = mirrorDisplayId;
++        }
++
+         return Pair.create(point, targetDisplayId);
+     }
+ 
+@@ -748,6 +783,9 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
+     }
+ 
+     private int getActionDisplayId() {
++        if (mirrorDisplayId >= 0) {
++            return mirrorDisplayId;
++        }
+         if (displayId != Device.DISPLAY_ID_NONE) {
+             // Real screen mirrored, use the source display id
+             return displayId;

@@ -1,0 +1,32 @@
+diff --git a/server/src/main/java/com/genymobile/scrcpy/daemon/display/DisplaySurfaceBroker.java b/server/src/main/java/com/genymobile/scrcpy/daemon/display/DisplaySurfaceBroker.java
+new file mode 100644
+index 00000000..4d3e9e0c
+--- /dev/null
++++ b/server/src/main/java/com/genymobile/scrcpy/daemon/display/DisplaySurfaceBroker.java
+@@ -0,0 +1,26 @@
++package com.genymobile.scrcpy.daemon.display;
++
++import com.genymobile.scrcpy.video.ExternalDisplayProvider;
++import android.hardware.display.VirtualDisplay;
++
++public final class DisplaySurfaceBroker implements ExternalDisplayProvider {
++
++    private final VirtualDisplayRegistry registry;
++
++    public DisplaySurfaceBroker(VirtualDisplayRegistry registry) {
++        this.registry = registry;
++    }
++
++    @Override
++    public VirtualDisplay get(int displayId) {
++        return registry.getVirtualDisplay(displayId);
++    }
++
++    @Override
++    public void restore(int displayId) {
++        VirtualDisplaySession session = registry.getSession(displayId);
++        if (session != null) {
++            session.restoreFallbackSurface();
++        }
++    }
++}

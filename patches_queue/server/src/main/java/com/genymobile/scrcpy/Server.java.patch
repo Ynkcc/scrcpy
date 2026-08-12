@@ -1,0 +1,43 @@
+diff --git a/server/src/main/java/com/genymobile/scrcpy/Server.java b/server/src/main/java/com/genymobile/scrcpy/Server.java
+index d7d1a76b..2556101e 100644
+--- a/server/src/main/java/com/genymobile/scrcpy/Server.java
++++ b/server/src/main/java/com/genymobile/scrcpy/Server.java
+@@ -9,6 +9,9 @@ import com.genymobile.scrcpy.audio.AudioRawRecorder;
+ import com.genymobile.scrcpy.audio.AudioSource;
+ import com.genymobile.scrcpy.control.ControlChannel;
+ import com.genymobile.scrcpy.control.Controller;
++import com.genymobile.scrcpy.daemon.DaemonArgs;
++import com.genymobile.scrcpy.daemon.DaemonOptions;
++import com.genymobile.scrcpy.daemon.DaemonServer;
+ import com.genymobile.scrcpy.device.DesktopConnection;
+ import com.genymobile.scrcpy.device.Device;
+ import com.genymobile.scrcpy.device.Streamer;
+@@ -233,6 +236,28 @@ public final class Server {
+             }
+         });
+ 
++        // Daemon mode MUST dispatch BEFORE dropRootPrivileges():
++        // daemon needs root for HiddenApiBypass, VirtualDisplay creation,
++        // and system service injection.
++        DaemonOptions daemonOptions = DaemonOptions.parse(args);
++        if (daemonOptions.isDaemonMode()) {
++            String[] scrubbed = DaemonArgs.strip(args);
++            Options options = Options.parse(scrubbed);
++
++            prepareMainLooper();
++
++            Ln.disableSystemStreams();
++            Ln.initLogLevel(options.getLogLevel());
++
++            Ln.i("Device: [" + Build.MANUFACTURER + "] " + Build.BRAND + " " + Build.MODEL + " (Android " + Build.VERSION.RELEASE + ")");
++            Ln.i("Starting in daemon mode (root preserved)");
++
++            // DaemonServer owns its TCP server socket lifecycle (init on run,
++            // close on shutdown) so this entry point only dispatches.
++            new DaemonServer(options, daemonOptions, scrubbed).run();
++            return;
++        }
++
+         dropRootPrivileges();
+ 
+         prepareMainLooper();

@@ -1,0 +1,13 @@
+diff --git a/server/src/main/java/com/genymobile/scrcpy/control/DeviceMessageSender.java b/server/src/main/java/com/genymobile/scrcpy/control/DeviceMessageSender.java
+index dc5e6be0..e60bdb4d 100644
+--- a/server/src/main/java/com/genymobile/scrcpy/control/DeviceMessageSender.java
++++ b/server/src/main/java/com/genymobile/scrcpy/control/DeviceMessageSender.java
+@@ -11,7 +11,7 @@ public final class DeviceMessageSender {
+     private final ControlChannel controlChannel;
+ 
+     private Thread thread;
+-    private final BlockingQueue<DeviceMessage> queue = new ArrayBlockingQueue<>(16);
++    private final BlockingQueue<DeviceMessage> queue = new ArrayBlockingQueue<>(64);
+ 
+     public DeviceMessageSender(ControlChannel controlChannel) {
+         this.controlChannel = controlChannel;

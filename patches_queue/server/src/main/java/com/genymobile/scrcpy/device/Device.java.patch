@@ -1,0 +1,14 @@
+diff --git a/server/src/main/java/com/genymobile/scrcpy/device/Device.java b/server/src/main/java/com/genymobile/scrcpy/device/Device.java
+index 615675a1..bcb9c977 100644
+--- a/server/src/main/java/com/genymobile/scrcpy/device/Device.java
++++ b/server/src/main/java/com/genymobile/scrcpy/device/Device.java
+@@ -64,7 +64,8 @@ public final class Device {
+             throw new AssertionError("Could not inject input event if !supportsInputEvents()");
+         }
+ 
+-        if (displayId != 0 && !InputManager.setDisplayId(inputEvent, displayId)) {
++        // 允许向除 0 号物理屏幕外的任何非负屏幕（如 daemon 创建的虚拟屏幕）注入输入事件
++        if (displayId >= 0 && !InputManager.setDisplayId(inputEvent, displayId)) {
+             return false;
+         }
+ 

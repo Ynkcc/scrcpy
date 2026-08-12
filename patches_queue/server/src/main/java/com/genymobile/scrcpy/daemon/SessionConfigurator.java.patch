@@ -1,0 +1,58 @@
+diff --git a/server/src/main/java/com/genymobile/scrcpy/daemon/SessionConfigurator.java b/server/src/main/java/com/genymobile/scrcpy/daemon/SessionConfigurator.java
+new file mode 100644
+index 00000000..ec604420
+--- /dev/null
++++ b/server/src/main/java/com/genymobile/scrcpy/daemon/SessionConfigurator.java
+@@ -0,0 +1,52 @@
++package com.genymobile.scrcpy.daemon;
++
++import com.genymobile.scrcpy.daemon.control.DaemonControlMessage;
++
++import java.util.List;
++
++/**
++ * Lets the negotiation-phase {@code DaemonCommandHandler} push per-session
++ * scrcpy option overrides back into the owning {@link ClientSession}.
++ *
++ * <p>{@code TYPE_CONFIGURE_SESSION} is the first thing a client sends on the
++ * ROLE_NEGOTIATION socket (after receiving sessionId + device meta). The
++ * handler calls back through this interface so the session can rebuild its
++ * per-session {@code Options} before any ROLE_VIDEO / ROLE_AUDIO / ROLE_CONTROL
++ * socket is opened — that is the "negotiate first, open more sockets after"
++ * ordering.
++ *
++ * <p>Only the negotiation-channel handler is wired with a non-null
++ * configurator; the control-channel handler passes {@code null} so a
++ * stray CONFIGURE on the control channel is rejected instead of silently
++ * no-opping.
++ */
++public interface SessionConfigurator {
++
++    /**
++     * Apply client-supplied scrcpy option overrides to this session and
++     * declare which (role, displayId) sockets the client will open.
++     *
++     * <p>This replaces the old single-{@code rolesMask} API. A session can
++     * now host N ROLE_VIDEO + N ROLE_CONTROL sockets to drive multiple
++     * virtual displays; {@code rolesEntries} enumerates the exact
++     * (role, displayId) pairs the client promises to bind. Role sockets
++     * whose (role, displayId) is not listed are rejected by the session
++     * gate.
++     *
++     * <p>{@code legacyRolesMask} is accepted for backward compatibility
++     * (0 = "not declared / allow all") but if {@code rolesEntries} is
++     * non-empty, the server ignores the mask and uses the entries instead.
++     *
++     * @param optionsKv      newline-separated {@code key=value} pairs
++     *                       (scrcpy option keys, e.g. {@code video_codec=h265});
++     *                       never {@code null}
++     * @param legacyRolesMask legacy 3-bit roles mask (bit 0 video, 1 audio,
++     *                        2 control); 0 means unspecified
++     * @param rolesEntries   explicit (role, displayId) declarations; empty
++     *                       falls back to the mask. The list is copied and
++     *                       made unmodifiable by the callee.
++     * @throws Exception if the options are invalid or video already started
++     */
++    void configure(String optionsKv, int legacyRolesMask,
++                   List<DaemonControlMessage.RoleEntry> rolesEntries) throws Exception;
++}

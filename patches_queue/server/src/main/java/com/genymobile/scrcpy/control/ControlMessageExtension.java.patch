@@ -1,0 +1,13 @@
+diff --git a/server/src/main/java/com/genymobile/scrcpy/control/ControlMessageExtension.java b/server/src/main/java/com/genymobile/scrcpy/control/ControlMessageExtension.java
+new file mode 100644
+index 00000000..08559034
+--- /dev/null
++++ b/server/src/main/java/com/genymobile/scrcpy/control/ControlMessageExtension.java
+@@ -0,0 +1,7 @@
++package com.genymobile.scrcpy.control;
++
++import java.io.IOException;
++
++public interface ControlMessageExtension {
++    boolean handle(ControlMessage msg) throws IOException;
++}

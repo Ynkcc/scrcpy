@@ -1,0 +1,218 @@
+diff --git a/server/src/main/java/com/genymobile/scrcpy/video/ScreenCapture.java b/server/src/main/java/com/genymobile/scrcpy/video/ScreenCapture.java
+index 0768181a..6143a59f 100644
+--- a/server/src/main/java/com/genymobile/scrcpy/video/ScreenCapture.java
++++ b/server/src/main/java/com/genymobile/scrcpy/video/ScreenCapture.java
+@@ -31,12 +31,35 @@ import java.util.Locale;
+ public class ScreenCapture extends SurfaceCapture {
+ 
+     private final VirtualDisplayListener vdListener;
+-    private final int displayId;
++    private int displayId;
+     private final Rect crop;
+     private Orientation.Lock captureOrientationLock;
+     private Orientation captureOrientation;
+     private final float angle;
+ 
++    private boolean isDaemonManaged;
++
++    private ExternalDisplayProvider externalDisplayProvider;
++
++    public void setExternalDisplayProvider(ExternalDisplayProvider provider) {
++        this.externalDisplayProvider = provider;
++    }
++
++    public void setDisplayId(int displayId) {
++        if (this.displayId != displayId) {
++            Ln.i("ScreenCapture: setDisplayId from " + this.displayId + " to " + displayId);
++            this.displayId = displayId;
++            displayMonitor.setDisplayId(displayId);
++            if (getCaptureControl() != null) {
++                getCaptureControl().reset(CaptureControl.RESET_REASON_DISPLAY_PROPERTIES_CHANGED);
++            }
++        }
++    }
++
++    public int getDisplayId() {
++        return displayId;
++    }
++
+     private VideoConstraints videoConstraints;
+ 
+     private DisplayInfo displayInfo;
+@@ -111,10 +134,15 @@ public class ScreenCapture extends SurfaceCapture {
+             SurfaceControl.destroyDisplay(display);
+             display = null;
+         }
+-        if (virtualDisplay != null) {
++        if (virtualDisplay != null && !isDaemonManaged) {
+             virtualDisplay.release();
+             virtualDisplay = null;
+         }
++        isDaemonManaged = false;
++
++        if (externalDisplayProvider != null && bindDaemonVirtualDisplay(surface)) {
++            return;
++        }
+ 
+         Size inputSize;
+         if (transform != null) {
+@@ -132,27 +160,34 @@ public class ScreenCapture extends SurfaceCapture {
+         try {
+             virtualDisplay = ServiceManager.getDisplayManager()
+                     .createVirtualDisplay("scrcpy", inputSize.getWidth(), inputSize.getHeight(), displayId, surface);
+-            Ln.d("Display: using DisplayManager API");
++            Ln.d("Display: using DisplayManager API for displayId=" + displayId + " arity=5");
+         } catch (Exception displayManagerException) {
+-            if (Build.BRAND.equalsIgnoreCase("oculus") && Build.MODEL.toLowerCase(Locale.ROOT).startsWith("quest")) {
+-                // Workaround for buggy createVirtualDisplay on Quest
+-                try {
+-                    virtualDisplay = (VirtualDisplay) VirtualDisplay.class.getDeclaredConstructors()[0].newInstance(null, null, null, surface);
+-                } catch (ReflectiveOperationException e) {
+-                    Ln.e("Could not create VirtualDisplay", e);
+-                }
+-            } else {
+-                try {
+-                    display = createDisplay();
+-
+-                    Size deviceSize = displayInfo.getSize();
+-                    int layerStack = displayInfo.getLayerStack();
+-                    setDisplaySurface(display, surface, deviceSize.toRect(), inputSize.toRect(), layerStack);
+-                    Ln.d("Display: using SurfaceControl API");
+-                } catch (Exception surfaceControlException) {
+-                    Ln.e("Could not create display using DisplayManager", displayManagerException);
+-                    Ln.e("Could not create display using SurfaceControl", surfaceControlException);
+-                    throw new AssertionError("Could not create display");
++            try {
++                virtualDisplay = ServiceManager.getDisplayManager()
++                        .createNewVirtualDisplay("scrcpy", inputSize.getWidth(), inputSize.getHeight(), displayInfo.getDpi(), surface, 0);
++                Ln.d("Display: using DisplayManager API for displayId=" + displayId + " arity=6 (fallback)");
++            } catch (Exception arity6Exception) {
++                if (Build.BRAND.equalsIgnoreCase("oculus") && Build.MODEL.toLowerCase(Locale.ROOT).startsWith("quest")) {
++                    // Workaround for buggy createVirtualDisplay on Quest
++                    try {
++                        virtualDisplay = (VirtualDisplay) VirtualDisplay.class.getDeclaredConstructors()[0].newInstance(null, null, null, surface);
++                    } catch (ReflectiveOperationException e) {
++                        Ln.e("Could not create VirtualDisplay", e);
++                    }
++                } else {
++                    try {
++                        display = createDisplay();
++
++                        Size deviceSize = displayInfo.getSize();
++                        int layerStack = displayInfo.getLayerStack();
++                        setDisplaySurface(display, surface, deviceSize.toRect(), inputSize.toRect(), layerStack);
++                        Ln.d("Display: using SurfaceControl API");
++                    } catch (Exception surfaceControlException) {
++                        Ln.e("Could not create display using DisplayManager (5-args)", displayManagerException);
++                        Ln.e("Could not create display using DisplayManager (6-args)", arity6Exception);
++                        Ln.e("Could not create display using SurfaceControl", surfaceControlException);
++                        throw new AssertionError("Could not create display");
++                    }
+                 }
+             }
+         }
+@@ -168,18 +203,88 @@ public class ScreenCapture extends SurfaceCapture {
+             } else {
+                 // The positions are relative to the virtual display, not the original display (so use inputSize, not deviceSize!)
+                 positionMapper = PositionMapper.create(videoSize, transform, inputSize);
+-                virtualDisplayId = virtualDisplay.getDisplay().getDisplayId();
++                // Always inject touch events into the ORIGINAL display (displayId)
++                // rather than the newly-created mirror virtual display, so that input
++                // reaches the user-created virtual display instead of the capture mirror.
++                virtualDisplayId = displayId;
+             }
+             vdListener.onNewVirtualDisplay(virtualDisplayId, positionMapper);
+         }
+     }
+ 
++    /**
++     * Bind the capture surface to a daemon-managed virtual display registered for the current
++     * {@code displayId}, if any. Returns {@code true} when a daemon virtual display handled the
++     * surface (in which case {@code start()} returns immediately); {@code false} to fall through
++     * to the upstream DisplayManager/SurfaceControl path.
++     *
++     * <p>This isolates the daemon projection branch so the upstream {@code start()} body stays
++     * intact and merges cleanly.
++     */
++    private boolean bindDaemonVirtualDisplay(Surface surface) throws IOException {
++        VirtualDisplay daemonVD = externalDisplayProvider.get(displayId);
++        if (daemonVD == null) {
++            return false;
++        }
++        Ln.i("ScreenCapture: using daemon-managed virtual display directly (displayId=" + displayId + ")");
++        try {
++            if (virtualDisplay != null) {
++                virtualDisplay.setSurface(null);
++            }
++            daemonVD.setSurface(surface);
++            virtualDisplay = daemonVD;
++            isDaemonManaged = true;
++            try {
++                boolean powered = ServiceManager.getDisplayManager().requestDisplayPower(displayId, true);
++                Ln.i("ScreenCapture: requestDisplayPower(" + displayId + ", true) = " + powered);
++            } catch (Throwable t) {
++                Ln.w("ScreenCapture: requestDisplayPower not supported: " + t.getMessage());
++            }
++
++            if (vdListener != null) {
++                int virtualDisplayId;
++                PositionMapper positionMapper;
++                // Match the upstream start() logic exactly (see lines 191-201 above):
++                //  - virtualDisplay != null (daemonVD is set) AND displayId != 0 → use VD's real id + inputSize
++                //  - displayId == 0 → main display path
++                if (displayId == 0) {
++                    Size deviceSize = displayInfo != null ? displayInfo.getSize()
++                            : new Size(daemonVD.getDisplay().getWidth(), daemonVD.getDisplay().getHeight());
++                    positionMapper = PositionMapper.create(videoSize, transform, deviceSize);
++                    virtualDisplayId = displayId;
++                } else {
++                    // Positions are relative to the virtual display content area:
++                    // use the encoded target size (inputSize) when a filter is applied,
++                    // otherwise the virtual display's own logical size (displaySize).
++                    Size inputSize;
++                    if (transform != null) {
++                        inputSize = displayInfo != null ? displayInfo.getSize()
++                                : new Size(daemonVD.getDisplay().getWidth(), daemonVD.getDisplay().getHeight());
++                    } else {
++                        inputSize = videoSize;
++                    }
++                    positionMapper = PositionMapper.create(videoSize, transform, inputSize);
++                    virtualDisplayId = daemonVD.getDisplay().getDisplayId();
++                }
++                Ln.i("ScreenCapture: bindDaemonVirtualDisplay vdListener id=" + virtualDisplayId + " (requested=" + displayId + ")");
++                vdListener.onNewVirtualDisplay(virtualDisplayId, positionMapper);
++            }
++        } catch (Exception e) {
++            Ln.e("ScreenCapture: failed to bind surface to daemon virtual display", e);
++            throw new IOException("Failed to bind surface to daemon virtual display", e);
++        }
++        return true;
++    }
++
+     @Override
+     public void stop() {
+         if (glRunner != null) {
+             glRunner.stopAndRelease();
+             glRunner = null;
+         }
++        if (isDaemonManaged && virtualDisplay != null && externalDisplayProvider != null) {
++            externalDisplayProvider.restore(displayId);
++        }
+     }
+ 
+     @Override
+@@ -191,8 +296,13 @@ public class ScreenCapture extends SurfaceCapture {
+             display = null;
+         }
+         if (virtualDisplay != null) {
+-            virtualDisplay.release();
++            if (!isDaemonManaged) {
++                virtualDisplay.release();
++            } else if (externalDisplayProvider != null) {
++                externalDisplayProvider.restore(displayId);
++            }
+             virtualDisplay = null;
++            isDaemonManaged = false;
+         }
+     }
+ 

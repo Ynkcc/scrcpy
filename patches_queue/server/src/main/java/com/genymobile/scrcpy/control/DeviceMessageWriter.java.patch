@@ -1,0 +1,21 @@
+diff --git a/server/src/main/java/com/genymobile/scrcpy/control/DeviceMessageWriter.java b/server/src/main/java/com/genymobile/scrcpy/control/DeviceMessageWriter.java
+index a18a2e5d..8ffcf83c 100644
+--- a/server/src/main/java/com/genymobile/scrcpy/control/DeviceMessageWriter.java
++++ b/server/src/main/java/com/genymobile/scrcpy/control/DeviceMessageWriter.java
+@@ -1,5 +1,6 @@
+ package com.genymobile.scrcpy.control;
+ 
++import com.genymobile.scrcpy.daemon.control.DaemonDeviceMessageWriter;
+ import com.genymobile.scrcpy.util.StringUtils;
+ 
+ import java.io.BufferedOutputStream;
+@@ -40,6 +41,9 @@ public class DeviceMessageWriter {
+                 dos.write(data);
+                 break;
+             default:
++                if (DaemonDeviceMessageWriter.write(msg, dos)) {
++                    break;
++                }
+                 throw new ControlProtocolException("Unknown event type: " + type);
+         }
+         dos.flush();

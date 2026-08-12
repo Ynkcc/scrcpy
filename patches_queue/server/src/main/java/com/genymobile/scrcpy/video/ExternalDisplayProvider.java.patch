@@ -1,0 +1,14 @@
+diff --git a/server/src/main/java/com/genymobile/scrcpy/video/ExternalDisplayProvider.java b/server/src/main/java/com/genymobile/scrcpy/video/ExternalDisplayProvider.java
+new file mode 100644
+index 00000000..e0ff18ed
+--- /dev/null
++++ b/server/src/main/java/com/genymobile/scrcpy/video/ExternalDisplayProvider.java
+@@ -0,0 +1,8 @@
++package com.genymobile.scrcpy.video;
++
++import android.hardware.display.VirtualDisplay;
++
++public interface ExternalDisplayProvider {
++    VirtualDisplay get(int displayId);
++    void restore(int displayId);
++}

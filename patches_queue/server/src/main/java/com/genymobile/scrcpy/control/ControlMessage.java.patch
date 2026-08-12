@@ -1,0 +1,28 @@
+diff --git a/server/src/main/java/com/genymobile/scrcpy/control/ControlMessage.java b/server/src/main/java/com/genymobile/scrcpy/control/ControlMessage.java
+index 777873b1..0a1c2d3a 100644
+--- a/server/src/main/java/com/genymobile/scrcpy/control/ControlMessage.java
++++ b/server/src/main/java/com/genymobile/scrcpy/control/ControlMessage.java
+@@ -61,6 +61,10 @@ public final class ControlMessage {
+     private int width;
+     private int height;
+ 
++    // Opaque payload attached by daemon-mode extensions. Null for upstream
++    // messages; the daemon reader/writer/handler cast it to a daemon DTO.
++    private Object extensionPayload;
++
+     private ControlMessage() {
+     }
+ 
+@@ -286,4 +290,12 @@ public final class ControlMessage {
+     public int getHeight() {
+         return height;
+     }
++
++    public Object getExtensionPayload() {
++        return extensionPayload;
++    }
++
++    public void setExtensionPayload(Object extensionPayload) {
++        this.extensionPayload = extensionPayload;
++    }
+ }

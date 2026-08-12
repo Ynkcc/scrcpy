@@ -1,0 +1,27 @@
+diff --git a/server/src/main/java/com/genymobile/scrcpy/control/ControlChannel.java b/server/src/main/java/com/genymobile/scrcpy/control/ControlChannel.java
+index 2f12cdb3..c64881a8 100644
+--- a/server/src/main/java/com/genymobile/scrcpy/control/ControlChannel.java
++++ b/server/src/main/java/com/genymobile/scrcpy/control/ControlChannel.java
+@@ -1,17 +1,17 @@
+ package com.genymobile.scrcpy.control;
+ 
+-import android.net.LocalSocket;
+-
+ import java.io.IOException;
++import java.io.InputStream;
++import java.io.OutputStream;
+ 
+ public final class ControlChannel {
+ 
+     private final ControlMessageReader reader;
+     private final DeviceMessageWriter writer;
+ 
+-    public ControlChannel(LocalSocket controlSocket) throws IOException {
+-        reader = new ControlMessageReader(controlSocket.getInputStream());
+-        writer = new DeviceMessageWriter(controlSocket.getOutputStream());
++    public ControlChannel(InputStream inputStream, OutputStream outputStream) throws IOException {
++        reader = new ControlMessageReader(inputStream);
++        writer = new DeviceMessageWriter(outputStream);
+     }
+ 
+     public ControlMessage recv() throws IOException {

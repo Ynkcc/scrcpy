@@ -1,0 +1,354 @@
+diff --git a/server/src/main/java/com/genymobile/scrcpy/daemon/control/DaemonCommandHandler.java b/server/src/main/java/com/genymobile/scrcpy/daemon/control/DaemonCommandHandler.java
+new file mode 100644
+index 00000000..2da510f6
+--- /dev/null
++++ b/server/src/main/java/com/genymobile/scrcpy/daemon/control/DaemonCommandHandler.java
+@@ -0,0 +1,348 @@
++package com.genymobile.scrcpy.daemon.control;
++
++import com.genymobile.scrcpy.control.ControlMessage;
++import com.genymobile.scrcpy.control.ControlMessageExtension;
++import com.genymobile.scrcpy.control.Controller;
++import com.genymobile.scrcpy.control.DeviceMessage;
++import com.genymobile.scrcpy.control.DeviceMessageSender;
++import com.genymobile.scrcpy.device.Device;
++import com.genymobile.scrcpy.daemon.display.VirtualDisplayRegistry;
++import com.genymobile.scrcpy.daemon.display.ActivityLauncher;
++import com.genymobile.scrcpy.daemon.display.AppLister;
++import com.genymobile.scrcpy.daemon.display.RotationController;
++import com.genymobile.scrcpy.daemon.DaemonExitCoordinator;
++import com.genymobile.scrcpy.daemon.SessionConfigurator;
++import com.genymobile.scrcpy.daemon.VideoController;
++import com.genymobile.scrcpy.daemon.video.FrameBroadcasterRegistry;
++import com.genymobile.scrcpy.util.Ln;
++import com.genymobile.scrcpy.video.CaptureControl;
++
++import java.io.IOException;
++import java.util.HashMap;
++import java.util.Map;
++import java.util.concurrent.ExecutorService;
++import java.util.concurrent.Executors;
++import java.util.concurrent.RejectedExecutionException;
++
++public final class DaemonCommandHandler implements ControlMessageExtension {
++
++    private static class HandlerEntry {
++        private final ExecutionPolicy policy;
++        private final CommandHandler handler;
++
++        HandlerEntry(ExecutionPolicy policy, CommandHandler handler) {
++            this.policy = policy;
++            this.handler = handler;
++        }
++    }
++
++    private final DeviceMessageSender sender;
++    // Mutable so the negotiation handler can be wired with the Controller after
++    // the control socket binds (see updateController). Before that, the
++    // negotiation handler runs with controller=null, and the command needing a
++    // controller (TYPE_RESIZE_VIRTUAL_DISPLAY's encoder
++    // kick) is simply unavailable.
++    private volatile Controller controller;
++    private volatile CommandContext context;
++
++    private final int sessionId;
++    private final VirtualDisplayRegistry registry;
++    private final DaemonExitCoordinator exitCoordinator;
++    private final RotationController rotationController;
++    private final SessionConfigurator sessionConfigurator;
++    private final FrameBroadcasterRegistry broadcasterRegistry;
++
++    // interactiveExecutor and lifecycleExecutor MUST use threads that have already
++    // called Looper.prepare() (and keep the Looper alive during the task run).
++    // Many code paths they execute perform lazy one-shot static initializations
++    // that internally allocate Handler(s) — e.g. Workarounds.getSystemContext()
++    // → ActivityThread → ActivityThread$H → Handler() — which will throw
++    //   "Can't create handler inside thread that has not called Looper.prepare()"
++    // on a plain Executors.defaultThreadFactory() thread.
++    // FakeContext.<clinit> failing has cascading effects: any subsequent
++    // reference to FakeContext will throw NoClassDefFoundError, which is what
++    // the second and later clients see after a VD creation fails on the first.
++    private static final class LooperThreadFactory implements java.util.concurrent.ThreadFactory {
++        private final String namePrefix;
++        private int counter = 0;
++
++        LooperThreadFactory(String namePrefix) {
++            this.namePrefix = namePrefix;
++        }
++
++        @Override
++        public synchronized Thread newThread(Runnable r) {
++            final int id = ++counter;
++            Thread t = new Thread(() -> {
++                android.os.Looper.prepare();
++                r.run();
++            }, namePrefix + "-" + id);
++            t.setDaemon(true);
++            return t;
++        }
++    }
++
++    private final ExecutorService interactiveExecutor = Executors.newSingleThreadExecutor(new LooperThreadFactory("daemon-cmd-interactive"));
++    private final ExecutorService lifecycleExecutor = Executors.newFixedThreadPool(4, new LooperThreadFactory("daemon-cmd-lifecycle"));
++    private final Map<Integer, HandlerEntry> registryMap = new HashMap<>();
++
++    public DaemonCommandHandler(Controller controller,
++                                VirtualDisplayRegistry registry, DaemonExitCoordinator exitCoordinator,
++                                VideoController videoController, SessionConfigurator sessionConfigurator,
++                                FrameBroadcasterRegistry broadcasterRegistry,
++                                int sessionId) {
++        this(controller != null ? controller.getDeviceMessageSender() : null, controller, registry,
++                exitCoordinator, videoController, sessionConfigurator, broadcasterRegistry, sessionId);
++    }
++
++    public DaemonCommandHandler(DeviceMessageSender sender, Controller controller,
++                                VirtualDisplayRegistry registry, DaemonExitCoordinator exitCoordinator,
++                                VideoController videoController, SessionConfigurator sessionConfigurator,
++                                FrameBroadcasterRegistry broadcasterRegistry,
++                                int sessionId) {
++        this.controller = controller;
++        this.sender = sender;
++        this.registry = registry;
++        this.exitCoordinator = exitCoordinator;
++        this.rotationController = new RotationController(registry);
++        this.sessionConfigurator = sessionConfigurator;
++        this.broadcasterRegistry = broadcasterRegistry;
++        this.sessionId = sessionId;
++        this.context = new CommandContext(sender, controller, videoController);
++        initRegistry();
++    }
++
++    public void close() {
++        interactiveExecutor.shutdownNow();
++        lifecycleExecutor.shutdownNow();
++    }
++
++    /**
++     * Wire the scrcpy {@link Controller} (created when ROLE_CONTROL binds) into
++     * this negotiation handler's context.
++     *
++     * <p>Before the control socket is opened, the negotiation handler runs with
++     * {@code controller=null}; commands that need a controller
++     * ({@code TYPE_RESIZE_VIRTUAL_DISPLAY}'s
++     * encoder kick) are unavailable. Once the control socket binds and creates
++     * a Controller, this call makes those commands work on the negotiation
++     * channel — which is why the control channel no longer needs its own
++     * {@code DaemonCommandHandler} (step 2: 职责去重).
++     *
++     * @param controller the Controller created by {@code ClientSession.onControlSocket}
++     */
++    public void updateController(Controller controller) {
++        this.controller = controller;
++        // Rebuild the whole context so every command sees the new controller.
++        // videoController is unchanged (it's the session-scoped one).
++        VideoController vc = context != null ? context.getVideoController() : null;
++        this.context = new CommandContext(sender, controller, vc);
++    }
++
++    private static DaemonControlMessage payload(ControlMessage msg) {
++        return DaemonControlMessages.payload(msg);
++    }
++
++    private void register(int type, ExecutionPolicy policy, CommandHandler handler) {
++        registryMap.put(type, new HandlerEntry(policy, handler));
++    }
++
++    private void initRegistry() {
++        register(DaemonControlMessages.TYPE_CREATE_VIRTUAL_DISPLAY, ExecutionPolicy.SLOW, (msg, ctx) -> {
++            DaemonControlMessage dto = payload(msg);
++            int newDisplayId = registry.createVirtualDisplay(
++                    dto.getText(), dto.getWidth(), dto.getHeight(), dto.getDpi(), dto.getFlags(), dto.getDisplayId());
++            if (newDisplayId == -1) {
++                throw new RuntimeException("FAILED");
++            }
++            // Make the display persistent by default: acquire a reference for the 
++            // daemon itself (-1) and the current session.
++            registry.acquire(newDisplayId, VirtualDisplayRegistry.PERSISTENT_SESSION_ID);
++            registry.acquire(newDisplayId, sessionId);
++            sendSuccessResponse(msg, newDisplayId, "OK");
++        });
++
++        register(DaemonControlMessages.TYPE_RELEASE_VIRTUAL_DISPLAY, ExecutionPolicy.SLOW, (msg, ctx) -> {
++            DaemonControlMessage dto = payload(msg);
++            // User explicitly requested release: perform a force-destroy.
++            boolean destroyed = registry.releaseVirtualDisplay(dto.getDisplayId());
++            sendSuccessResponse(msg, dto.getDisplayId(), destroyed ? "DESTROYED" : "RELEASED");
++        });
++
++        register(DaemonControlMessages.TYPE_RESIZE_VIRTUAL_DISPLAY, ExecutionPolicy.SLOW, (msg, ctx) -> {
++            DaemonControlMessage dto = payload(msg);
++            int displayId = dto.getDisplayId();
++            boolean ok = registry.resizeVirtualDisplay(
++                    displayId, dto.getWidth(), dto.getHeight(), dto.getDpi());
++            if (!ok) {
++                throw new RuntimeException("FAILED");
++            }
++            // Step 4: kick the shared broadcaster's encoder so it rebuilds at
++            // the new dimensions. All subscribers receive a fresh session meta
++            // from the encoder's reset path. Previously this reached the
++            // encoder via the per-session controller's surfaceCapture, which
++            // no longer exists (the capture is now shared per displayId).
++            Ln.i("DaemonCommandHandler: resize displayId=" + displayId
++                    + " — requesting shared broadcaster reset for new size "
++                    + dto.getWidth() + "x" + dto.getHeight());
++            broadcasterRegistry.kick(displayId,
++                    CaptureControl.RESET_REASON_CLIENT_RESIZED
++                            | CaptureControl.RESET_REASON_DISPLAY_PROPERTIES_CHANGED);
++            sendSuccessResponse(msg, displayId, "OK");
++        });
++
++        register(DaemonControlMessages.TYPE_START_ACTIVITY, ExecutionPolicy.SLOW, (msg, ctx) -> {
++            DaemonControlMessage dto = payload(msg);
++            int result = ActivityLauncher.startActivity(dto.getText(), dto.getDisplayId());
++            if (result < 0) {
++                throw new RuntimeException("FAILED");
++            }
++            sendSuccessResponse(msg, dto.getDisplayId(), "OK");
++        });
++
++        register(DaemonControlMessages.TYPE_GET_ACTIVE_DISPLAY_IDS, ExecutionPolicy.FAST, (msg, ctx) -> {
++            int[] ids = registry.getActiveDisplayIds();
++            if (ctx.getSender() != null) {
++                DeviceMessage response = DaemonDeviceMessages.createActiveDisplaysResponse(payload(msg).getSequence(), ids);
++                ctx.getSender().send(response);
++            }
++        });
++
++        register(DaemonControlMessages.TYPE_EXIT_DAEMON, ExecutionPolicy.FAST, (msg, ctx) -> {
++            Ln.i("handleExitDaemon: Quit request received, replying OK and shutting down...");
++            sendSuccessResponse(msg, -1, "OK");
++
++            new Thread(() -> {
++                try {
++                    Thread.sleep(100);
++                } catch (InterruptedException e) {
++                    Thread.currentThread().interrupt();
++                    Ln.d("handleExitDaemon: delay interrupted, proceeding to exit");
++                }
++                exitCoordinator.requestExit();
++                close();
++            }).start();
++        });
++
++        register(DaemonControlMessages.TYPE_GET_ROTATION, ExecutionPolicy.FAST, (msg, ctx) -> {
++            DaemonControlMessage dto = payload(msg);
++            int rotation = rotationController.getRotation(dto.getDisplayId());
++            sendSuccessResponse(msg, dto.getDisplayId(), String.valueOf(rotation));
++        });
++
++        register(DaemonControlMessages.TYPE_FREEZE_ROTATION, ExecutionPolicy.FAST, (msg, ctx) -> {
++            DaemonControlMessage dto = payload(msg);
++            // rotation (0-3) carried in dto.getFlags() (see DaemonControlMessages).
++            rotationController.freeze(dto.getDisplayId(), dto.getFlags());
++            sendSuccessResponse(msg, dto.getDisplayId(), "OK");
++        });
++
++        register(DaemonControlMessages.TYPE_THAW_ROTATION, ExecutionPolicy.FAST, (msg, ctx) -> {
++            DaemonControlMessage dto = payload(msg);
++            rotationController.thaw(dto.getDisplayId());
++            sendSuccessResponse(msg, dto.getDisplayId(), "OK");
++        });
++
++        register(DaemonControlMessages.TYPE_IS_ROTATION_FROZEN, ExecutionPolicy.FAST, (msg, ctx) -> {
++            DaemonControlMessage dto = payload(msg);
++            int frozen = rotationController.isFrozen(dto.getDisplayId());
++            sendSuccessResponse(msg, dto.getDisplayId(), String.valueOf(frozen));
++        });
++
++        register(DaemonControlMessages.TYPE_GET_ACTIVE_DISPLAY_INFOS, ExecutionPolicy.FAST, (msg, ctx) -> {
++            com.genymobile.scrcpy.display.DisplayInfo[] infos = registry.getActiveDisplayInfos();
++            if (ctx.getSender() != null) {
++                DeviceMessage response = DaemonDeviceMessages.createActiveDisplayInfosResponse(payload(msg).getSequence(), infos);
++                ctx.getSender().send(response);
++            }
++        });
++
++        register(DaemonControlMessages.TYPE_CONFIGURE_SESSION, ExecutionPolicy.FAST, (msg, ctx) -> {
++            if (sessionConfigurator == null) {
++                throw new RuntimeException("CONFIGURE_SESSION is only available on the negotiation channel");
++            }
++            DaemonControlMessage dto = payload(msg);
++            sessionConfigurator.configure(dto.getOptionsKv(), dto.getRolesMask(), dto.getRolesEntries());
++            sendSuccessResponse(msg, -1, "OK");
++        });
++
++        register(DaemonControlMessages.TYPE_LAUNCH_HOME, ExecutionPolicy.SLOW, (msg, ctx) -> {
++            DaemonControlMessage dto = payload(msg);
++            int result = ActivityLauncher.launchHome(dto.getDisplayId());
++            if (result < 0) {
++                throw new RuntimeException("FAILED");
++            }
++            sendSuccessResponse(msg, dto.getDisplayId(), "OK");
++        });
++
++        register(DaemonControlMessages.TYPE_LIST_APPS, ExecutionPolicy.SLOW, (msg, ctx) -> {
++            java.util.List<com.genymobile.scrcpy.model.DeviceApp> apps = AppLister.listInstalledApps();
++            if (ctx.getSender() != null) {
++                DeviceMessage response = DaemonDeviceMessages.createAppsListResponse(payload(msg).getSequence(), apps);
++                ctx.getSender().send(response);
++            }
++        });
++
++        register(DaemonControlMessages.TYPE_PING, ExecutionPolicy.FAST, (msg, ctx) -> {
++            sendSuccessResponse(msg, -1, "PONG");
++        });
++    }
++
++    @Override
++    public boolean handle(ControlMessage msg) throws IOException {
++        HandlerEntry entry = registryMap.get(msg.getType());
++        if (entry == null) {
++            return false;
++        }
++
++        Runnable task = () -> {
++            try {
++                entry.handler.handle(msg, context);
++            } catch (Throwable t) {
++                Ln.e("Execution of command type=" + msg.getType() + " failed", t);
++                sendErrorResponse(msg, t);
++            }
++        };
++
++        // submit() is the source of truth for executor state. The previous
++        // isShutdown() check was racy (close() could shutdownNow() between the
++        // check and submit), and an uncaught RejectedExecutionException would
++        // propagate through Controller.handleEvent and terminate the
++        // control-recv thread. Catch it here and report the message as
++        // unhandled instead.
++        try {
++            if (entry.policy == ExecutionPolicy.FAST) {
++                interactiveExecutor.submit(task);
++            } else {
++                lifecycleExecutor.submit(task);
++            }
++        } catch (RejectedExecutionException e) {
++            Ln.w("DaemonCommandHandler: executor rejected message type=" + msg.getType() + " (shutting down?)");
++            return false;
++        }
++        return true;
++    }
++
++    private void sendSuccessResponse(ControlMessage msg, int extraData, String text) {
++        if (sender != null) {
++            try {
++                DeviceMessage response = DaemonDeviceMessages.createGenericResponse(payload(msg).getSequence(), 0, extraData, text);
++                sender.send(response);
++            } catch (Exception e) {
++                Ln.e("Failed to send response", e);
++            }
++        }
++    }
++
++    private void sendErrorResponse(ControlMessage msg, Throwable t) {
++        if (sender != null) {
++            try {
++                String errorMsg = t.getMessage() != null ? t.getMessage() : t.toString();
++                DeviceMessage response = DaemonDeviceMessages.createGenericResponse(payload(msg).getSequence(), -1, -1, errorMsg);
++                sender.send(response);
++            } catch (Exception e) {
++                Ln.e("Failed to send error response", e);
++            }
++        }
++    }
++}

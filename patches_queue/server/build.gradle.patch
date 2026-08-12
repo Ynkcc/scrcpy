@@ -1,0 +1,10 @@
+diff --git a/server/build.gradle b/server/build.gradle
+index 0d701638..f002d3a9 100644
+--- a/server/build.gradle
++++ b/server/build.gradle
+@@ -29,4 +29,4 @@ dependencies {
+     testImplementation 'junit:junit:4.13.2'
+ }
+ 
+-apply from: "$project.rootDir/config/android-checkstyle.gradle"
++apply from: "${project.projectDir}/../config/android-checkstyle.gradle"

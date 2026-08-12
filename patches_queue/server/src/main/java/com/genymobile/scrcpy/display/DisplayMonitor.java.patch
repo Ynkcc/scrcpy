@@ -1,0 +1,48 @@
+diff --git a/server/src/main/java/com/genymobile/scrcpy/display/DisplayMonitor.java b/server/src/main/java/com/genymobile/scrcpy/display/DisplayMonitor.java
+index f6d871c9..3f49a515 100644
+--- a/server/src/main/java/com/genymobile/scrcpy/display/DisplayMonitor.java
++++ b/server/src/main/java/com/genymobile/scrcpy/display/DisplayMonitor.java
+@@ -36,13 +36,20 @@ public class DisplayMonitor {
+ 
+     private Listener listener;
+ 
++    // 供守护进程模式在动态切换视频投屏源时，动态更新监视的屏幕 ID
++    public synchronized void setDisplayId(int displayId) {
++        this.displayId = displayId;
++    }
++
+     public void start(int displayId, Listener listener) {
+-        // Once started, the listener and the displayId must never change
+         assert listener != null;
+         this.listener = listener;
+ 
+-        assert this.displayId == Device.DISPLAY_ID_NONE;
+-        this.displayId = displayId;
++        // Only set displayId from start() if it was not pre-set via setDisplayId()
++        // (daemon mode may call setDisplayId() before init/start to switch sources)
++        if (this.displayId == Device.DISPLAY_ID_NONE) {
++            this.displayId = displayId;
++        }
+ 
+         if (USE_DEFAULT_METHOD) {
+             handlerThread = new HandlerThread("DisplayListener");
+@@ -53,7 +60,9 @@ public class DisplayMonitor {
+                     Ln.v("DisplayMonitor: onDisplayChanged(" + eventDisplayId + ")");
+                 }
+ 
+-                if (eventDisplayId == displayId) {
++                // Read this.displayId (not the start() parameter) so
++                // setDisplayId() switches take effect in the listener.
++                if (eventDisplayId == DisplayMonitor.this.displayId) {
+                     try {
+                         checkDisplayPropertiesChanged();
+                     } catch (Throwable e) {
+@@ -70,7 +79,7 @@ public class DisplayMonitor {
+                         Ln.v("DisplayMonitor: onDisplayConfigurationChanged(" + eventDisplayId + ")");
+                     }
+ 
+-                    if (eventDisplayId == displayId) {
++                    if (eventDisplayId == DisplayMonitor.this.displayId) {
+                         try {
+                             checkDisplayPropertiesChanged();
+                         } catch (Throwable e) {

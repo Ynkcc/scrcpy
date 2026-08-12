@@ -1,0 +1,136 @@
+diff --git a/server/src/main/java/com/genymobile/scrcpy/wrappers/DisplayManager.java b/server/src/main/java/com/genymobile/scrcpy/wrappers/DisplayManager.java
+index 1be04c3a..cd4dbf1a 100644
+--- a/server/src/main/java/com/genymobile/scrcpy/wrappers/DisplayManager.java
++++ b/server/src/main/java/com/genymobile/scrcpy/wrappers/DisplayManager.java
+@@ -48,7 +48,10 @@ public final class DisplayManager {
+     private final Object manager; // instance of hidden class android.hardware.display.DisplayManagerGlobal
+     private Method getDisplayInfoMethod;
+     private Method createVirtualDisplayMethod;
++    private Method createVirtualDisplayGlobalMethod;
++    private Constructor<?> displayManagerCtor;
+     private Method requestDisplayPowerMethod;
++    private boolean requestDisplayPowerUsesInt; // true 表示第二个参数为 int（Display.STATE_*），false 表示 boolean
+ 
+     static DisplayManager create() {
+         try {
+@@ -174,24 +177,115 @@ public final class DisplayManager {
+     }
+ 
+     public VirtualDisplay createNewVirtualDisplay(String name, int width, int height, int dpi, Surface surface, int flags) throws Exception {
+-        Constructor<android.hardware.display.DisplayManager> ctor = android.hardware.display.DisplayManager.class.getDeclaredConstructor(
+-                Context.class);
+-        ctor.setAccessible(true);
+-        android.hardware.display.DisplayManager dm = ctor.newInstance(FakeContext.get());
++        // Prefer DisplayManagerGlobal.createVirtualDisplay over constructing a new
++        // DisplayManager(Context): the DisplayManagerGlobal singleton is already
++        // fully initialized, and its createVirtualDisplay method has been stable
++        // across Android versions (with a few overloads). The previous approach of
++        // reflectively constructing DisplayManager with FakeContext is brittle —
++        // FakeContext wraps Workarounds.getSystemContext() and on many Android
++        // builds the shell/root UID cannot satisfy DisplayManager's internal
++        // invariants, causing InvocationTargetException inside
++        // dm.createVirtualDisplay (e.g. "Invalid display manager service handle").
++        if (createVirtualDisplayGlobalMethod == null) {
++            // Probe several common overload signatures of DisplayManagerGlobal.
++            // The full signature on recent Android is:
++            //   createVirtualDisplay(String pkgName, String name, int w, int h,
++            //       int dpi, Surface surface, int flags, VirtualDisplay.Callback cb,
++            //       Handler handler, String uniqueId)
++            // Older versions have fewer params.
++            Class<?>[] pkg = {String.class, String.class, int.class, int.class, int.class, Surface.class, int.class};
++            Class<?>[] cb = {String.class, String.class, int.class, int.class, int.class, Surface.class, int.class,
++                    android.hardware.display.VirtualDisplay.Callback.class, android.os.Handler.class};
++            Class<?>[] full = {String.class, String.class, int.class, int.class, int.class, Surface.class, int.class,
++                    android.hardware.display.VirtualDisplay.Callback.class, android.os.Handler.class, String.class};
++            Class<?>[] noPkg = {String.class, int.class, int.class, int.class, Surface.class, int.class};
++            Class<?>[][] candidates = {full, cb, pkg, noPkg};
++            Method chosen = null;
++            for (Class<?>[] c : candidates) {
++                try {
++                    chosen = manager.getClass().getDeclaredMethod("createVirtualDisplay", c);
++                    chosen.setAccessible(true);
++                    break;
++                } catch (NoSuchMethodException ignored) {
++                    // try next
++                }
++            }
++            createVirtualDisplayGlobalMethod = chosen;
++        }
++
++        if (createVirtualDisplayGlobalMethod != null) {
++            Method m = createVirtualDisplayGlobalMethod;
++            Class<?>[] ptypes = m.getParameterTypes();
++            Object[] args = new Object[ptypes.length];
++            int idx = 0;
++            if (ptypes[idx] == String.class && ptypes.length > 1 && ptypes[idx + 1] == String.class) {
++                // first param is packageName
++                args[idx++] = FakeContext.PACKAGE_NAME;
++            }
++            args[idx++] = name;
++            args[idx++] = width;
++            args[idx++] = height;
++            args[idx++] = dpi;
++            args[idx++] = surface;
++            if (idx < ptypes.length && ptypes[idx] == int.class) {
++                args[idx++] = flags;
++            }
++            // Callback + Handler + uniqueId: leave null, they are optional
++            while (idx < args.length) {
++                args[idx++] = null;
++            }
++            try {
++                VirtualDisplay vd = (VirtualDisplay) m.invoke(manager, args);
++                if (vd != null) {
++                    Ln.i("DisplayManager: created VD via Global (method arity=" + ptypes.length + ")");
++                    return vd;
++                }
++            } catch (java.lang.reflect.InvocationTargetException ite) {
++                Throwable cause = ite.getCause() != null ? ite.getCause() : ite;
++                Ln.w("DisplayManager: Global.createVirtualDisplay failed, will fallback: " + cause);
++                // Fall through to fallback path below
++            }
++        }
++
++        // Fallback: construct DisplayManager via Context (old path).
++        // Cache the constructor to avoid repeated reflective lookup.
++        if (displayManagerCtor == null) {
++            displayManagerCtor = android.hardware.display.DisplayManager.class.getDeclaredConstructor(Context.class);
++            displayManagerCtor.setAccessible(true);
++        }
++        android.hardware.display.DisplayManager dm =
++                (android.hardware.display.DisplayManager) displayManagerCtor.newInstance(FakeContext.get());
++        Ln.w("DisplayManager: falling back to DisplayManager(Context) path");
+         return dm.createVirtualDisplay(name, width, height, dpi, surface, flags);
+     }
+ 
+     private Method getRequestDisplayPowerMethod() throws NoSuchMethodException {
+         if (requestDisplayPowerMethod == null) {
+-            requestDisplayPowerMethod = manager.getClass().getMethod("requestDisplayPower", int.class, boolean.class);
++            // 不同 Android 版本第二个参数不同：boolean（旧）或 int Display.STATE_*（新）
++            try {
++                requestDisplayPowerMethod = manager.getClass().getDeclaredMethod("requestDisplayPower", int.class, boolean.class);
++                requestDisplayPowerUsesInt = false;
++            } catch (NoSuchMethodException e) {
++                requestDisplayPowerMethod = manager.getClass().getDeclaredMethod("requestDisplayPower", int.class, int.class);
++                requestDisplayPowerUsesInt = true;
++            }
++            requestDisplayPowerMethod.setAccessible(true);
+         }
+         return requestDisplayPowerMethod;
+     }
+ 
+     @TargetApi(AndroidVersions.API_35_ANDROID_15)
+     public boolean requestDisplayPower(int displayId, boolean on) {
++        if (android.os.Build.VERSION.SDK_INT < AndroidVersions.API_35_ANDROID_15) {
++            return false;
++        }
+         try {
+             Method method = getRequestDisplayPowerMethod();
++            if (requestDisplayPowerUsesInt) {
++                // int 版本使用 Display.STATE_ON(2) / Display.STATE_OFF(1)
++                int state = on ? android.view.Display.STATE_ON : android.view.Display.STATE_OFF;
++                return (boolean) method.invoke(manager, displayId, state);
++            }
+             return (boolean) method.invoke(manager, displayId, on);
+         } catch (ReflectiveOperationException e) {
+             Ln.e("Could not invoke method", e);

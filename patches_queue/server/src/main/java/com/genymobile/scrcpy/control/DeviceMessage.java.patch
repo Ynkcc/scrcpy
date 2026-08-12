@@ -1,0 +1,41 @@
+diff --git a/server/src/main/java/com/genymobile/scrcpy/control/DeviceMessage.java b/server/src/main/java/com/genymobile/scrcpy/control/DeviceMessage.java
+index 079a7a04..033ac97c 100644
+--- a/server/src/main/java/com/genymobile/scrcpy/control/DeviceMessage.java
++++ b/server/src/main/java/com/genymobile/scrcpy/control/DeviceMessage.java
+@@ -12,6 +12,10 @@ public final class DeviceMessage {
+     private int id;
+     private byte[] data;
+ 
++    // Opaque payload attached by daemon-mode extensions. Null for upstream
++    // messages; the daemon writer casts it to a daemon DTO.
++    private Object extensionPayload;
++
+     private DeviceMessage() {
+     }
+ 
+@@ -37,6 +41,12 @@ public final class DeviceMessage {
+         return event;
+     }
+ 
++    public static DeviceMessage createEmpty(int type) {
++        DeviceMessage event = new DeviceMessage();
++        event.type = type;
++        return event;
++    }
++
+     public int getType() {
+         return type;
+     }
+@@ -56,4 +66,12 @@ public final class DeviceMessage {
+     public byte[] getData() {
+         return data;
+     }
++
++    public Object getExtensionPayload() {
++        return extensionPayload;
++    }
++
++    public void setExtensionPayload(Object extensionPayload) {
++        this.extensionPayload = extensionPayload;
++    }
+ }

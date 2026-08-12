@@ -1,0 +1,13 @@
+diff --git a/server/src/main/java/com/genymobile/scrcpy/daemon/VideoController.java b/server/src/main/java/com/genymobile/scrcpy/daemon/VideoController.java
+new file mode 100644
+index 00000000..b2ad00eb
+--- /dev/null
++++ b/server/src/main/java/com/genymobile/scrcpy/daemon/VideoController.java
+@@ -0,0 +1,7 @@
++package com.genymobile.scrcpy.daemon;
++
++public interface VideoController {
++    boolean startVideoStream(int displayId);
++    boolean stopVideoStream();
++    boolean isVideoStarted();
++}
