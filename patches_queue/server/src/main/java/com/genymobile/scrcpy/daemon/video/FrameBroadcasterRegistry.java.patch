@@ -1,186 +1,107 @@
 diff --git a/server/src/main/java/com/genymobile/scrcpy/daemon/video/FrameBroadcasterRegistry.java b/server/src/main/java/com/genymobile/scrcpy/daemon/video/FrameBroadcasterRegistry.java
-new file mode 100644
-index 00000000..d551e38f
---- /dev/null
+index d551e38f..4b85293c 100644
+--- a/server/src/main/java/com/genymobile/scrcpy/daemon/video/FrameBroadcasterRegistry.java
 +++ b/server/src/main/java/com/genymobile/scrcpy/daemon/video/FrameBroadcasterRegistry.java
-@@ -0,0 +1,180 @@
-+package com.genymobile.scrcpy.daemon.video;
-+
-+import com.genymobile.scrcpy.Options;
-+import com.genymobile.scrcpy.control.Controller;
-+import com.genymobile.scrcpy.daemon.display.DisplaySurfaceBroker;
-+import com.genymobile.scrcpy.util.Ln;
-+
-+import java.io.FileDescriptor;
-+import java.util.ArrayList;
-+import java.util.HashMap;
-+import java.util.List;
-+import java.util.Map;
-+
-+/**
-+ * Reference-counted registry of {@link FrameBroadcaster}s, keyed by
-+ * {@code displayId}. Mirrors the ownership model of
-+ * {@code VirtualDisplayRegistry}: a broadcaster is created on the first
-+ * subscriber for a displayId and torn down when its last subscriber leaves.
-+ *
-+ * <p>This is the encoder/broadcast counterpart to {@code VirtualDisplayRegistry}'s
-+ * virtual-display refcount (A9): {@code VirtualDisplayRegistry} owns VD
-+ * lifetime (creators + streamers), this registry owns encoder/broadcaster
-+ * lifetime (subscribers). The two are independent — a VD can survive with zero
-+ * subscribers (lossless recovery), and a broadcaster is rebuilt afresh each
-+ * time a subscriber reappears.
-+ *
-+ * <h3>Concurrency</h3>
-+ * All get-or-create / subscribe / unsubscribe / remove decisions happen under
-+ * {@link #lock} so that "last subscriber leaves → shutdown" is atomic w.r.t.
-+ * "new subscriber arrives → reuse". Heavy I/O ({@link FrameBroadcaster#shutdown})
-+ * runs outside the lock. Lock ordering is strictly registry → broadcaster; the
-+ * broadcaster never calls back into the registry while holding its own lock, so
-+ * no deadlock is possible.
-+ */
-+public final class FrameBroadcasterRegistry {
-+
-+    private final DisplaySurfaceBroker broker;
-+    private final Object lock = new Object();
-+    private final Map<Integer, FrameBroadcaster> broadcasters = new HashMap<>();
-+    // sessionId → displayId this session is currently subscribed to. A session
-+    // has at most one live video subscriber at a time.
-+    private final Map<Integer, Integer> sessionDisplay = new HashMap<>();
-+
-+    public FrameBroadcasterRegistry(DisplaySurfaceBroker broker) {
-+        this.broker = broker;
-+    }
-+
-+    /**
-+     * Subscribe {@code sessionId} to the broadcaster for {@code displayId},
-+     * creating it if necessary.
-+     *
-+     * <p>The first subscriber's {@code options} / {@code baseArgs} are baked
-+     * into the shared encoder (A1). Subsequent subscribers reuse the running
-+     * broadcaster and their options are ignored (a warning is logged by the
-+     * caller if they differ).
-+     *
-+     * @param displayId target virtual display
-+     * @param sessionId the subscribing client session
-+     * @param videoFd   the session's video socket file descriptor
-+     * @param options   per-session scrcpy options (used only when creating the broadcaster)
-+     * @param baseArgs  per-session scrubbed scrcpy args (used only when creating the broadcaster)
-+     * @param controller the session's controller (used only when creating the broadcaster, as
-+     *                   {@code VirtualDisplayListener}); may be {@code null}
-+     * @return the subscriber handle (owned by the caller; release via
-+     *         {@link #releaseSubscriber} or {@link #releaseSession})
-+     */
-+    public VideoSubscriber acquireSubscriber(int displayId, int sessionId, FileDescriptor videoFd,
-+                                             Options options, String[] baseArgs, Controller controller) throws Exception {
-+        FrameBroadcaster b;
-+        boolean created;
-+        synchronized (lock) {
-+            FrameBroadcaster existing = broadcasters.get(displayId);
-+            if (existing != null) {
-+                b = existing;
-+                created = false;
-+            } else {
-+                // create() does only object construction + async encode-thread
-+                // launch (no blocking I/O), so holding the lock here is safe
-+                // and keeps get-or-create atomic w.r.t. release/teardown.
-+                b = FrameBroadcaster.create(displayId, baseArgs, options, broker, controller);
-+                broadcasters.put(displayId, b);
-+                created = true;
-+            }
-+            sessionDisplay.put(sessionId, displayId);
-+            // subscribe under the lock so it is atomic w.r.t. a concurrent
-+            // releaseSubscriber that might otherwise shut the broadcaster down
-+            // between get() and subscribe().
-+            VideoSubscriber sub = b.subscribe(sessionId, videoFd);
-+            Ln.i("FrameBroadcasterRegistry: session " + sessionId + " subscribed to displayId=" + displayId
-+                    + " (created=" + created + ", subscribers=" + b.subscriberCount() + ")");
-+            return sub;
-+        }
-+    }
-+
-+    /**
-+     * Release a specific subscriber. If it was the last one for its displayId,
-+     * the broadcaster is shut down (encoder stopped, VD fallback surface
-+     * restored). The VD itself is not destroyed (refs/13 §7, A5).
-+     */
-+    public void releaseSubscriber(int displayId, int sessionId, VideoSubscriber sub) {
-+        FrameBroadcaster toShutdown = null;
-+        synchronized (lock) {
-+            sessionDisplay.remove(sessionId);
-+            FrameBroadcaster b = broadcasters.get(displayId);
-+            if (b != null) {
-+                b.unsubscribe(sub);
-+                if (b.subscriberCount() == 0) {
-+                    broadcasters.remove(displayId);
-+                    toShutdown = b;
+@@ -8,8 +8,10 @@ import com.genymobile.scrcpy.util.Ln;
+ import java.io.FileDescriptor;
+ import java.util.ArrayList;
+ import java.util.HashMap;
++import java.util.HashSet;
+ import java.util.List;
+ import java.util.Map;
++import java.util.Set;
+
+ /**
+  * Reference-counted registry of {@link FrameBroadcaster}s, keyed by
+@@ -37,9 +39,8 @@ public final class FrameBroadcasterRegistry {
+     private final DisplaySurfaceBroker broker;
+     private final Object lock = new Object();
+     private final Map<Integer, FrameBroadcaster> broadcasters = new HashMap<>();
+-    // sessionId → displayId this session is currently subscribed to. A session
+-    // has at most one live video subscriber at a time.
+-    private final Map<Integer, Integer> sessionDisplay = new HashMap<>();
++    // sessionId → set of displayIds this session is currently subscribed to.
++    private final Map<Integer, Set<Integer>> sessionDisplays = new HashMap<>();
+
+     public FrameBroadcasterRegistry(DisplaySurfaceBroker broker) {
+         this.broker = broker;
+@@ -80,7 +81,8 @@ public final class FrameBroadcasterRegistry {
+                 broadcasters.put(displayId, b);
+                 created = true;
+             }
+-            sessionDisplay.put(sessionId, displayId);
++            Set<Integer> displays = sessionDisplays.computeIfAbsent(sessionId, k -> new HashSet<>());
++            displays.add(displayId);
+             // subscribe under the lock so it is atomic w.r.t. a concurrent
+             // releaseSubscriber that might otherwise shut the broadcaster down
+             // between get() and subscribe().
+@@ -99,7 +101,13 @@ public final class FrameBroadcasterRegistry {
+     public void releaseSubscriber(int displayId, int sessionId, VideoSubscriber sub) {
+         FrameBroadcaster toShutdown = null;
+         synchronized (lock) {
+-            sessionDisplay.remove(sessionId);
++            Set<Integer> displays = sessionDisplays.get(sessionId);
++            if (displays != null) {
++                displays.remove(displayId);
++                if (displays.isEmpty()) {
++                    sessionDisplays.remove(sessionId);
 +                }
 +            }
-+        }
-+        if (toShutdown != null) {
-+            toShutdown.shutdown();
-+        }
-+    }
-+
-+    /**
-+     * Release every subscriber held by a session. Called from
-+     * {@code ClientSession.cleanup()} as a safety net so a disconnecting client
-+     * never orphans a subscriber (mirrors {@code VirtualDisplayRegistry.releaseSession}).
-+     */
-+    public void releaseSession(int sessionId) {
-+        Integer displayId;
-+        FrameBroadcaster toShutdown = null;
-+        synchronized (lock) {
-+            displayId = sessionDisplay.remove(sessionId);
-+            if (displayId != null) {
-+                FrameBroadcaster b = broadcasters.get(displayId);
-+                if (b != null) {
-+                    int remaining = b.unsubscribeBySession(sessionId);
-+                    if (remaining == 0) {
-+                        broadcasters.remove(displayId);
-+                        toShutdown = b;
+             FrameBroadcaster b = broadcasters.get(displayId);
+             if (b != null) {
+                 b.unsubscribe(sub);
+@@ -121,30 +129,32 @@ public final class FrameBroadcasterRegistry {
+      * never orphans a subscriber (mirrors {@code VirtualDisplayRegistry.releaseSession}).
+      */
+     public void releaseSession(int sessionId) {
+-        Integer displayId;
+-        FrameBroadcaster toShutdown = null;
++        Set<Integer> displays;
++        List<FrameBroadcaster> toShutdownList = new ArrayList<>();
+         synchronized (lock) {
+-            displayId = sessionDisplay.remove(sessionId);
+-            if (displayId != null) {
+-                FrameBroadcaster b = broadcasters.get(displayId);
++            displays = sessionDisplays.remove(sessionId);
++            if (displays != null) {
++                for (int displayId : displays) {
++                    FrameBroadcaster b = broadcasters.get(displayId);
++                    if (b != null) {
++                        int remaining = b.unsubscribeBySession(sessionId);
++                        if (remaining == 0) {
++                            broadcasters.remove(displayId);
++                            toShutdownList.add(b);
++                        }
 +                    }
 +                }
 +            }
 +        }
-+        if (toShutdown != null) {
-+            toShutdown.shutdown();
-+        }
-+        if (displayId != null) {
-+            Ln.i("FrameBroadcasterRegistry: released session " + sessionId
-+                    + " subscriber on displayId=" + displayId
-+                    + (toShutdown != null ? " (broadcaster shut down)" : ""));
-+        }
-+    }
-+
-+    /**
-+     * Kick the shared encoder for a displayId (e.g. after a VD resize) so it
-+     * rebuilds at the new dimensions and re-emits session meta to all
-+     * subscribers.
-+     */
-+    public void kick(int displayId, int resetReasons) {
-+        FrameBroadcaster b;
-+        synchronized (lock) {
-+            b = broadcasters.get(displayId);
-+        }
-+        if (b != null) {
-+            b.kick(resetReasons);
-+        } else {
-+            Ln.w("FrameBroadcasterRegistry: kick for displayId=" + displayId
-+                    + " — no active broadcaster (nothing to reset)");
-+        }
-+    }
-+
-+    /** Release all broadcasters. Called from {@code DaemonServer.shutdown()}. */
-+    public void releaseAll() {
-+        List<FrameBroadcaster> all;
-+        synchronized (lock) {
-+            all = new ArrayList<>(broadcasters.values());
-+            broadcasters.clear();
-+            sessionDisplay.clear();
-+        }
-+        for (FrameBroadcaster b : all) {
++        for (FrameBroadcaster b : toShutdownList) {
 +            b.shutdown();
 +        }
-+        Ln.i("FrameBroadcasterRegistry: released all broadcasters (" + all.size() + ")");
-+    }
-+}
++        if (displays != null) {
++            for (int displayId : displays) {
++                Ln.i("FrameBroadcasterRegistry: released session " + sessionId
++                        + " subscriber on displayId=" + displayId);
+             }
+         }
+-        if (toShutdown != null) {
+-            toShutdown.shutdown();
+-        }
+-        if (displayId != null) {
+-            Ln.i("FrameBroadcasterRegistry: released session " + sessionId
+-                    + " subscriber on displayId=" + displayId
+-                    + (toShutdown != null ? " (broadcaster shut down)" : ""));
+-        }
+     }
+
+     /**
+@@ -172,7 +182,7 @@ public final class FrameBroadcasterRegistry {
+         synchronized (lock) {
+             all = new ArrayList<>(broadcasters.values());
+             broadcasters.clear();
+-            sessionDisplay.clear();
++            sessionDisplays.clear();
+         }
+         for (FrameBroadcaster b : all) {
+             b.shutdown();

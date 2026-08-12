@@ -1,146 +1,39 @@
 diff --git a/server/src/main/java/com/genymobile/scrcpy/daemon/DaemonArgs.java b/server/src/main/java/com/genymobile/scrcpy/daemon/DaemonArgs.java
-new file mode 100644
-index 00000000..843abedc
---- /dev/null
+index 843abedc..399b6623 100644
+--- a/server/src/main/java/com/genymobile/scrcpy/daemon/DaemonArgs.java
 +++ b/server/src/main/java/com/genymobile/scrcpy/daemon/DaemonArgs.java
-@@ -0,0 +1,140 @@
-+package com.genymobile.scrcpy.daemon;
-+
-+import com.genymobile.scrcpy.util.Ln;
-+
-+import java.util.ArrayList;
-+import java.util.Arrays;
-+import java.util.Collections;
-+import java.util.LinkedHashMap;
-+import java.util.List;
-+import java.util.Map;
-+import java.util.Set;
-+
-+public final class DaemonArgs {
-+
-+    private DaemonArgs() {
-+    }
-+
-+    /**
-+     * 过滤掉所有的 daemon 专属参数，还原出供上游 Options.parse 使用的参数数组。
-+     * daemon 参数均为 key=value 形式：daemon / daemon_port / daemon_bind_address
-+     */
-+    public static String[] strip(String[] args) {
-+        if (args == null) {
-+            return new String[0];
-+        }
-+        List<String> list = new ArrayList<>();
-+        for (String arg : args) {
-+            int eq = arg.indexOf('=');
-+            if (eq != -1) {
-+                String key = arg.substring(0, eq);
-+                if (key.equals("daemon") || key.equals("daemon_port") || key.equals("daemon_bind_address") || key.equals("daemon_secret_token")) {
-+                    continue;
+@@ -99,14 +99,22 @@ public final class DaemonArgs {
+         }
+
+         if (optionsKv != null && !optionsKv.isEmpty()) {
+-            for (String line : optionsKv.split("\n", -1)) {
+-                String trimmed = line.trim();
++            int start = 0;
++            int end;
++            while (start < optionsKv.length()) {
++                end = optionsKv.indexOf('\n', start);
++                if (end == -1) {
++                    end = optionsKv.length();
 +                }
-+            }
-+            list.add(arg);
-+        }
-+        return list.toArray(new String[0]);
-+    }
++                String line = optionsKv.substring(start, end);
++                start = end + 1;
 +
-+    /**
-+     * 将参数数组中的 display_id=X 替换/追加为指定的 displayId，
-+     * 从而可以使用原生的 Options.parse 重新解析出带有指定 displayId 的 Options。
-+     * 注意：scrcpy 原生参数键为 display_id（下划线、无 -- 前缀），恒为 key=value 形式。
-+     */
-+    public static String[] changeDisplayId(String[] args, int displayId) {
-+        String[] stripped = strip(args);
-+        List<String> list = new ArrayList<>();
-+        boolean found = false;
-+
-+        for (String arg : stripped) {
-+            if (arg.startsWith("display_id=")) {
-+                list.add("display_id=" + displayId);
-+                found = true;
-+            } else {
-+                list.add(arg);
-+            }
-+        }
-+
-+        if (!found) {
-+            list.add("display_id=" + displayId);
-+        }
-+
-+        return list.toArray(new String[0]);
-+    }
-+
-+    /**
-+     * Option keys that a client MUST NOT override via {@code TYPE_CONFIGURE_SESSION}.
-+     *
-+     * <p>These either belong to the daemon bootstrap (daemon*), are owned by the
-+     * daemon's own command set (display_id is set by START_VIDEO_STREAM, new_display
-+     * is replaced by VirtualDisplayRegistry), control process lifecycle/security
-+     * (scid, cleanup, power_*, tunnel_forward), or select non-mirroring modes
-+     * (list_*). Allowing a client to set them would break the session contract.
-+     */
-+    private static final Set<String> BLOCKED_CONFIGURE_KEYS = Collections.unmodifiableSet(
-+            new java.util.HashSet<>(Arrays.asList(
-+                    "daemon", "daemon_port", "daemon_bind_address", "daemon_secret_token",
-+                    "display_id", "new_display", "scid", "tunnel_forward",
-+                    "cleanup", "power_on", "power_off_on_close",
-+                    "list_encoders", "list_displays", "list_cameras",
-+                    "list_camera_sizes", "list_apps")));
-+
-+    /**
-+     * Merge client-supplied scrcpy option overrides into the daemon base args,
-+     * producing a per-session args array suitable for {@code Options.parse}.
-+     *
-+     * <p>{@code baseArgs[0]} is the client version string (not a key=value pair)
-+     * and is preserved verbatim as the first element. The remaining entries are
-+     * key=value pairs; overrides from {@code optionsKv} replace existing keys or
-+     * append new ones. Keys in {@link #BLOCKED_CONFIGURE_KEYS} are dropped with
-+     * a warning.
-+     *
-+     * @param baseArgs  the scrubbed daemon base args ([0]=client version, rest key=value)
-+     * @param optionsKv newline-separated {@code key=value} overrides; may be empty/null
-+     * @return a new args array with overrides applied
-+     */
-+    public static String[] mergeOptions(String[] baseArgs, String optionsKv) {
-+        if (baseArgs == null || baseArgs.length == 0) {
-+            return new String[0];
-+        }
-+
-+        // Preserve insertion order so the merged args stay deterministic.
-+        LinkedHashMap<String, String> map = new LinkedHashMap<>();
-+        for (int i = 1; i < baseArgs.length; i++) {
-+            String arg = baseArgs[i];
-+            int eq = arg.indexOf('=');
-+            if (eq != -1) {
-+                map.put(arg.substring(0, eq), arg.substring(eq + 1));
-+            }
-+        }
-+
-+        if (optionsKv != null && !optionsKv.isEmpty()) {
-+            for (String line : optionsKv.split("\n", -1)) {
 +                String trimmed = line.trim();
-+                if (trimmed.isEmpty()) {
-+                    continue;
-+                }
-+                int eq = trimmed.indexOf('=');
-+                if (eq == -1) {
-+                    Ln.w("DaemonArgs.mergeOptions: ignoring malformed option line: " + trimmed);
-+                    continue;
-+                }
-+                String key = trimmed.substring(0, eq);
-+                String value = trimmed.substring(eq + 1);
-+                if (BLOCKED_CONFIGURE_KEYS.contains(key)) {
-+                    Ln.w("DaemonArgs.mergeOptions: ignoring blocked option key in CONFIGURE_SESSION: " + key);
-+                    continue;
-+                }
-+                map.put(key, value);
-+            }
-+        }
-+
-+        List<String> list = new ArrayList<>(map.size() + 1);
-+        list.add(baseArgs[0]); // client version
-+        for (Map.Entry<String, String> e : map.entrySet()) {
-+            list.add(e.getKey() + "=" + e.getValue());
-+        }
-+        return list.toArray(new String[0]);
-+    }
-+}
+                 if (trimmed.isEmpty()) {
+                     continue;
+                 }
+                 int eq = trimmed.indexOf('=');
+                 if (eq == -1) {
+-                    Ln.w("DaemonArgs.mergeOptions: ignoring malformed option line: " + trimmed);
+                     continue;
+                 }
+                 String key = trimmed.substring(0, eq);
+@@ -115,10 +123,10 @@ public final class DaemonArgs {
+                     Ln.w("DaemonArgs.mergeOptions: ignoring blocked option key in CONFIGURE_SESSION: " + key);
+                     continue;
+                 }
+                 map.put(key, value);
+             }
+         }
+
+         List<String> list = new ArrayList<>(map.size() + 1);

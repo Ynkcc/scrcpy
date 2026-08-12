@@ -1,0 +1,64 @@
+diff --git a/server/src/main/java/com/genymobile/scrcpy/daemon/video/ByteArrayPool.java b/server/src/main/java/com/genymobile/scrcpy/daemon/video/ByteArrayPool.java
+new file mode 100644
+index 00000000..e69de29b
+--- /dev/null
++++ b/server/src/main/java/com/genymobile/scrcpy/daemon/video/ByteArrayPool.java
+@@ -0,0 +1,63 @@
++package com.genymobile.scrcpy.daemon.video;
++
++import java.util.ArrayDeque;
++import java.util.Deque;
++import java.util.HashMap;
++import java.util.Map;
++
++/**
++ * Simple pool for byte arrays to reduce GC pressure.
++ * Rounds up requested sizes to the next power of two to improve reuse.
++ */
++final class ByteArrayPool {
++    private static final int MAX_POOL_SIZE_PER_BUCKET = 8;
++    private static final Map<Integer, Deque<byte[]>> pool = new HashMap<>();
++
++    private ByteArrayPool() {}
++
++    static synchronized byte[] get(int size) {
++        int bucketSize = roundUpToPowerOfTwo(size);
++        Deque<byte[]> bucket = pool.get(bucketSize);
++        if (bucket != null && !bucket.isEmpty()) {
++            return bucket.pollFirst();
++        }
++        return new byte[bucketSize];
++    }
++
++    static synchronized void recycle(byte[] array) {
++        if (array == null) {
++            return;
++        }
++        int bucketSize = array.length;
++        // Only recycle arrays that are powers of two (from our pool)
++        if ((bucketSize & (bucketSize - 1)) != 0) {
++            return;
++        }
++        Deque<byte[]> bucket = pool.computeIfAbsent(bucketSize, k -> new ArrayDeque<>());
++        if (bucket.size() < MAX_POOL_SIZE_PER_BUCKET) {
++            bucket.addLast(array);
++        }
++    }
++
++    private static int roundUpToPowerOfTwo(int n) {
++        if (n <= 0) return 1;
++        n--;
++        n |= n >> 1;
++        n |= n >> 2;
++        n |= n >> 4;
++        n |= n >> 8;
++        n |= n >> 16;
++        return n + 1;
++    }
++
++    /** Clear the entire pool. Used on daemon shutdown. */
++    static synchronized void clear() {
++        pool.clear();
++    }
++}
++

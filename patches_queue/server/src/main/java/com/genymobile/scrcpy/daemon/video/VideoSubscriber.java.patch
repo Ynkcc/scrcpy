@@ -100,6 +100,7 @@ index 00000000..8ad8d4e7
 +     */
 +    void deliver(Frame frame) {
 +        if (closed || !alive.get()) {
++            frame.release(); // release the retain from fanOut
 +            return;
 +        }
 +        if (queue.offer(frame)) {
@@ -113,12 +114,14 @@ index 00000000..8ad8d4e7
 +            Ln.w("VideoSubscriber[" + sessionId + "]: queue full and no droppable frame "
 +                    + "(would lose a keyframe) — closing slow subscriber");
 +            close();
++            frame.release(); // release the retain from fanOut
 +            return;
 +        }
 +        // After eviction there must be room; best-effort re-offer.
 +        if (!queue.offer(frame)) {
 +            // Extremely unlikely (concurrent re-drain), but stay safe.
 +            Ln.w("VideoSubscriber[" + sessionId + "]: offer failed post-eviction — dropping frame " + frame);
++            frame.release(); // release the retain from fanOut
 +        }
 +    }
 +
@@ -133,6 +136,7 @@ index 00000000..8ad8d4e7
 +            Frame f = it.next();
 +            if (f.isDroppable()) {
 +                it.remove();
++                f.release();
 +                return true;
 +            }
 +        }
@@ -168,7 +172,8 @@ index 00000000..8ad8d4e7
 +                    streamer.writeSessionMeta(f.width, f.height, f.isClientResize);
 +                    break;
 +                case Frame.KIND_PACKET:
-+                    ByteBuffer buf = ByteBuffer.wrap(f.data, 0, f.length);
++                    byte[] data = f.getData();
++                    ByteBuffer buf = ByteBuffer.wrap(data, 0, f.length);
 +                    streamer.writePacket(buf, f.pts, f.config, f.keyFrame);
 +                    break;
 +                default:
@@ -185,6 +190,8 @@ index 00000000..8ad8d4e7
 +            // immediately (the socket is gone — no point keeping the display
 +            // alive for a dead stream). External close() does not call this.
 +            notifyDeath();
++        } finally {
++            f.release();
 +        }
 +    }
 +
@@ -197,7 +204,11 @@ index 00000000..8ad8d4e7
 +        if (writeThread != null) {
 +            writeThread.interrupt();
 +        }
-+        queue.clear();
++        List<Frame> remaining = new ArrayList<>();
++        queue.drainTo(remaining);
++        for (Frame f : remaining) {
++            f.release();
++        }
 +    }
 +
 +    /** @return {@code true} while the write thread is alive and no error has occurred. */

@@ -156,12 +156,15 @@ index 00000000..c15c40fc
 +            subscribers.add(sub);
 +            subscribersBySession.put(sessionId, sub);
 +            if (cachedHeader != null) {
++                cachedHeader.retain();
 +                sub.deliver(cachedHeader);
 +            }
 +            if (cachedMeta != null) {
++                cachedMeta.retain();
 +                sub.deliver(cachedMeta);
 +            }
 +            if (cachedConfigPacket != null) {
++                cachedConfigPacket.retain();
 +                sub.deliver(cachedConfigPacket);
 +            }
 +        }
@@ -262,6 +265,18 @@ index 00000000..c15c40fc
 +            }
 +        }
 +        synchronized (lock) {
++            if (cachedHeader != null) {
++                cachedHeader.release();
++                cachedHeader = null;
++            }
++            if (cachedMeta != null) {
++                cachedMeta.release();
++                cachedMeta = null;
++            }
++            if (cachedConfigPacket != null) {
++                cachedConfigPacket.release();
++                cachedConfigPacket = null;
++            }
 +            for (VideoSubscriber sub : subscribers) {
 +                sub.close();
 +            }
@@ -276,7 +291,11 @@ index 00000000..c15c40fc
 +    public void writeVideoHeader() throws IOException {
 +        Frame f = Frame.header();
 +        synchronized (lock) {
++            if (cachedHeader != null) {
++                cachedHeader.release();
++            }
 +            cachedHeader = f;
++            f.retain(); // for cachedHeader
 +            fanOut(f);
 +        }
 +    }
@@ -285,7 +304,11 @@ index 00000000..c15c40fc
 +    public void writeSessionMeta(int width, int height, boolean isClientResize) throws IOException {
 +        Frame f = Frame.meta(width, height, isClientResize);
 +        synchronized (lock) {
++            if (cachedMeta != null) {
++                cachedMeta.release();
++            }
 +            cachedMeta = f;
++            f.retain(); // for cachedMeta
 +            fanOut(f);
 +        }
 +    }
@@ -297,7 +320,11 @@ index 00000000..c15c40fc
 +            if (config) {
 +                // Cache the latest CSD so a subscriber joining later can init
 +                // its decoder before the next keyframe (refs/13 §4C, A2).
++                if (cachedConfigPacket != null) {
++                    cachedConfigPacket.release();
++                }
 +                cachedConfigPacket = f;
++                f.retain(); // for cachedConfigPacket
 +            }
 +            fanOut(f);
 +        }
@@ -335,6 +362,7 @@ index 00000000..c15c40fc
 +                sub.close();
 +                continue;
 +            }
++            f.retain(); // for subscriber's queue
 +            sub.deliver(f);
 +            if (!sub.isAlive()) {
 +                it.remove();

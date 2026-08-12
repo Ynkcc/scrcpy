@@ -3,7 +3,7 @@ new file mode 100644
 index 00000000..aee5d22c
 --- /dev/null
 +++ b/server/src/main/java/com/genymobile/scrcpy/daemon/video/Frame.java
-@@ -0,0 +1,92 @@
+@@ -0,0 +1,141 @@
 +package com.genymobile.scrcpy.daemon.video;
 +
 +import java.nio.ByteBuffer;
@@ -25,6 +25,29 @@ index 00000000..aee5d22c
 + */
 +final class Frame {
 +
++    /**
++     * Shared data holder with reference counting.
++     */
++    private static final class Data {
++        private final byte[] bytes;
++        private int refCount;
++
++        Data(byte[] bytes) {
++            this.bytes = bytes;
++            this.refCount = 1;
++        }
++
++        synchronized void retain() {
++            refCount++;
++        }
++
++        synchronized void release() {
++            if (--refCount == 0) {
++                ByteArrayPool.recycle(bytes);
++            }
++        }
++    }
++
 +    static final int KIND_HEADER = 0; // writeVideoHeader()
 +    static final int KIND_META = 1;   // writeSessionMeta(w, h, isClientResize)
 +    static final int KIND_PACKET = 2; // writePacket(data, pts, config, keyFrame)
@@ -32,7 +55,7 @@ index 00000000..aee5d22c
 +    final int kind;
 +
 +    // KIND_PACKET only
-+    final byte[] data;
++    private final Data data;
 +    final int length;
 +    final long pts;
 +    final boolean config;
@@ -43,7 +66,7 @@ index 00000000..aee5d22c
 +    final int height;
 +    final boolean isClientResize;
 +
-+    private Frame(int kind, byte[] data, int length, long pts, boolean config, boolean keyFrame,
++    private Frame(int kind, Data data, int length, long pts, boolean config, boolean keyFrame,
 +                  int width, int height, boolean isClientResize) {
 +        this.kind = kind;
 +        this.data = data;
@@ -71,9 +94,32 @@ index 00000000..aee5d22c
 +     */
 +    static Frame packet(ByteBuffer buffer, long pts, boolean config, boolean keyFrame) {
 +        int len = buffer.remaining();
-+        byte[] data = new byte[len];
-+        buffer.duplicate().get(data);
-+        return new Frame(KIND_PACKET, data, len, pts, config, keyFrame, 0, 0, false);
++        byte[] bytes = ByteArrayPool.get(len);
++        buffer.duplicate().get(bytes, 0, len);
++        return new Frame(KIND_PACKET, new Data(bytes), len, pts, config, keyFrame, 0, 0, false);
++    }
++
++    /**
++     * Increment the reference count of the underlying data.
++     */
++    void retain() {
++        if (data != null) {
++            data.retain();
++        }
++    }
++
++    /**
++     * Decrement the reference count of the underlying data and recycle the
++     * buffer if it reaches zero.
++     */
++    void release() {
++        if (data != null) {
++            data.release();
++        }
++    }
++
++    byte[] getData() {
++        return data != null ? data.bytes : null;
 +    }
 +
 +    /**
@@ -96,3 +142,4 @@ index 00000000..aee5d22c
 +        }
 +    }
 +}
++
